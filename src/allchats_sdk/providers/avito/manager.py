@@ -29,7 +29,7 @@ from allchats_sdk.providers.avito.sync_worker import (
 from allchats_sdk.providers.common.proxy import requests_proxies_from_credentials
 from allchats_sdk.config import Settings
 from allchats_sdk.events import CredentialsUpdatedEvent, OutgoingMessageEvent
-from allchats_sdk.protocols import EventSink
+from allchats_sdk.protocols import EventSink, IncomingMessageHandler, MediaStorage
 from allchats_sdk.providers.credentials_cache import CredentialsCache
 from allchats_sdk.credentials import (
     avito_authorized,
@@ -57,15 +57,15 @@ class AvitoClientManager:
         self,
         settings: Settings,
         event_sink: EventSink,
-        voice_message_service: Any | None = None,
+        incoming_handler: IncomingMessageHandler | None = None,
     ) -> None:
         self._settings = settings
         self._sink = event_sink
         self._creds = CredentialsCache()
-        self._voice_message_service = voice_message_service
+        self._incoming_handler = incoming_handler
         self._clients: dict[str, AvitoAccountClient] = {}
         self._sync_tasks: dict[str, asyncio.Task[None]] = {}
-        self._media_storage: Any = None
+        self._media_storage: MediaStorage | None = None
 
     @property
     def event_sink(self) -> EventSink:

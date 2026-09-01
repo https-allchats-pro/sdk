@@ -514,9 +514,9 @@ class MaxRuntimeFactory:
 
         @client.on_message_read()
         async def on_message_read(event: Any, _client: Client | WebClient) -> None:
-            delivery_service = getattr(self._manager, "_delivery_service", None)
+            delivery_tracker = getattr(self._manager, "_delivery_tracker", None)
             account_id = runtime.snapshot.account_id
-            if delivery_service is None or not account_id:
+            if delivery_tracker is None or not account_id:
                 return
             if getattr(event, "set_as_unread", False):
                 return
@@ -535,7 +535,7 @@ class MaxRuntimeFactory:
             if chat_id is None or mark is None:
                 return
             try:
-                await delivery_service.mark_up_to_sent_at(
+                await delivery_tracker.mark_up_to_sent_at(
                     account_id,
                     external_chat_id=str(int(chat_id)),
                     sent_before=int(mark),

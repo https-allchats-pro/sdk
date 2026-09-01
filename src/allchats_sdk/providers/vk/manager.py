@@ -39,7 +39,7 @@ from allchats_sdk.events import (
     CredentialsUpdatedEvent,
     OutgoingMessageEvent,
 )
-from allchats_sdk.protocols import EventSink
+from allchats_sdk.protocols import DeliveryTracker, EventSink, IncomingMessageHandler
 from allchats_sdk.credentials import merge_credentials, vk_authorized
 from allchats_sdk.errors import ValidationError
 from allchats_sdk.observability import record_auth
@@ -70,12 +70,13 @@ class VkClientManager:
         self,
         settings: Settings,
         event_sink: EventSink,
-        voice_message_service: Any | None = None,
+        incoming_handler: IncomingMessageHandler | None = None,
     ) -> None:
         self._settings = settings
         self._sink = event_sink
         self._creds = CredentialsCache()
-        self._voice_message_service = voice_message_service
+        self._incoming_handler = incoming_handler
+        self._delivery_tracker: DeliveryTracker | None = None
         self._clients: dict[str, VkAccountClient] = {}
         self._longpoll_tasks: dict[str, asyncio.Task[None]] = {}
         self._oauth_pkce: dict[str, str] = {}
@@ -678,10 +679,10 @@ class VkClientManager:
                 access_token=access_token,
                 owner_user_id=user_id,
                 event_sink=self._sink,
-                voice_message_service=self._voice_message_service,
+                incoming_handler=self._incoming_handler,
                 stop_event=client.stop_event,
                 proxies=proxies,
-                delivery_service=getattr(self, "_delivery_service", None),
+                delivery_tracker=getattr(self, "_delivery_tracker", None),
             ),
             name=f"vk-longpoll-{account_id[:8]}",
         )

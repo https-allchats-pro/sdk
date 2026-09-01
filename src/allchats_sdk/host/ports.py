@@ -9,11 +9,21 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from allchats_sdk.protocols import EventSink, NullEventSink
+from allchats_sdk.host_ports import (
+    CredentialStorage,
+    DeliveryTracker,
+    IncomingMessageHandler,
+    MediaStorage,
+)
 
 __all__ = [
+    "CredentialStorage",
+    "DeliveryTracker",
     "EventSink",
-    "NullEventSink",
+    "IncomingMessageHandler",
+    "MediaStorage",
     "MaxSessionHost",
+    "NullEventSink",
     "SessionManager",
     "SessionRuntime",
 ]

@@ -44,6 +44,15 @@ manager = default_registry.create(
 | WhatsApp | `[whatsapp]` | QR (neonize) |
 | Discord | `[discord]` | QR, login |
 
+## Storage interfaces
+
+Host implements SDK protocols (see ``allchats_sdk.host_ports``):
+
+- ``MediaStorage`` — save voice/media/avatar files
+- ``DeliveryTracker`` — message delivery/read receipts
+- ``IncomingMessageHandler`` — rich media incoming/outgoing processing
+- ``CredentialStorage`` — optional persistent credentials (future)
+
 ## Events
 
 Providers emit events through `EventSink`:

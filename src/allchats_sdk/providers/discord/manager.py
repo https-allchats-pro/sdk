@@ -20,7 +20,7 @@ from allchats_sdk.providers.discord.api import (
 )
 from allchats_sdk.config import Settings
 from allchats_sdk.events import ChatsDiscoveredEvent, CredentialsUpdatedEvent, OutgoingMessageEvent
-from allchats_sdk.protocols import EventSink
+from allchats_sdk.protocols import EventSink, IncomingMessageHandler
 from allchats_sdk.providers.credentials_cache import CredentialsCache
 from allchats_sdk.credentials import discord_authorized, merge_credentials
 from allchats_sdk.errors import ValidationError
@@ -50,12 +50,12 @@ class DiscordClientManager:
         self,
         settings: Settings,
         event_sink: EventSink,
-        voice_message_service: Any | None = None,
+        incoming_handler: IncomingMessageHandler | None = None,
     ) -> None:
         self._settings = settings
         self._sink = event_sink
         self._creds = CredentialsCache()
-        self._voice_message_service = voice_message_service
+        self._incoming_handler = incoming_handler
         self._clients: dict[str, DiscordAccountClient] = {}
         self._gateway_tasks: dict[str, asyncio.Task[None]] = {}
         self._gateway_ready: dict[str, bool] = {}

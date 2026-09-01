@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from allchats_sdk.providers.telegram.manager import TelegramAccountClient, TelegramClientManager
     from allchats_sdk.config import Settings
-    from allchats_sdk.protocols import EventSink
+    from allchats_sdk.protocols import (
+        DeliveryTracker,
+        EventSink,
+        IncomingMessageHandler,
+        MediaStorage,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +37,7 @@ async def _resolve_incoming_context(
     event: Any,
     account_id: str,
     *,
-    media_storage: Any | None = None,
+    media_storage: MediaStorage | None = None,
 ) -> dict[str, Any]:
     from telethon import utils
 
@@ -64,9 +69,9 @@ def _register_message_handlers(
     account_id: str,
     client_state: TelegramAccountClient,
     event_sink: EventSink,
-    voice_message_service: Any | None = None,
-    delivery_service: Any | None = None,
-    media_storage: Any | None = None,
+    incoming_handler: IncomingMessageHandler | None = None,
+    delivery_tracker: DeliveryTracker | None = None,
+    media_storage: MediaStorage | None = None,
 ) -> None:
     from telethon import events, utils
 
@@ -107,8 +112,8 @@ def _register_message_handlers(
                 )
             return
 
-        if voice_message_service is not None:
-            await voice_message_service.process_telegram_incoming(
+        if incoming_handler is not None:
+            await incoming_handler.process_telegram_incoming(
                 account_id=account_id,
                 client=client,
                 event=event,
@@ -200,8 +205,8 @@ def _register_message_handlers(
                 )
             return
 
-        if voice_message_service is not None:
-            await voice_message_service.process_telegram_outgoing(
+        if incoming_handler is not None:
+            await incoming_handler.process_telegram_outgoing(
                 account_id=account_id,
                 client=client,
                 event=event,
@@ -264,7 +269,7 @@ def _register_message_handlers(
 
     @client.on(events.MessageRead())
     async def on_message_read(event: Any) -> None:
-        if not client_state.running or delivery_service is None:
+        if not client_state.running or delivery_tracker is None:
             return
         if getattr(event, "inbox", False):
             return
@@ -278,7 +283,7 @@ def _register_message_handlers(
             logger.debug("telegram read receipt: failed to resolve chat", exc_info=True)
             return
         try:
-            await delivery_service.mark_up_to_external_id(
+            await delivery_tracker.mark_up_to_external_id(
                 account_id,
                 external_chat_id=external_chat_id,
                 max_external_id=int(max_id),
@@ -300,7 +305,7 @@ async def run_telegram_session_worker(
     client_state: TelegramAccountClient,
     manager: TelegramClientManager,
     event_sink: EventSink,
-    voice_message_service: Any | None = None,
+    incoming_handler: IncomingMessageHandler | None = None,
 ) -> None:
     from telethon import TelegramClient
     from telethon.sessions import StringSession
@@ -360,8 +365,8 @@ async def run_telegram_session_worker(
             account_id=account_id,
             client_state=client_state,
             event_sink=event_sink,
-            voice_message_service=voice_message_service,
-            delivery_service=getattr(manager, "_delivery_service", None),
+            incoming_handler=incoming_handler,
+            delivery_tracker=getattr(manager, "_delivery_tracker", None),
             media_storage=getattr(manager, "_media_storage", None),
         )
         from allchats_sdk.providers.telegram.calls import telegram_call_coordinator

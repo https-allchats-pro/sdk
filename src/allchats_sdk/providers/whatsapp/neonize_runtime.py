@@ -37,7 +37,7 @@ if TYPE_CHECKING:
         WhatsAppAccountClient,
         WhatsAppClientManager,
     )
-    from allchats_sdk.protocols import EventSink
+    from allchats_sdk.protocols import EventSink, IncomingMessageHandler
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ async def run_whatsapp_neonize_runtime(
     client_state: WhatsAppAccountClient,
     manager: WhatsAppClientManager,
     event_sink: EventSink,
-    voice_message_service: Any | None = None,
+    incoming_handler: IncomingMessageHandler | None = None,
     credentials: dict[str, Any] | None = None,
 ) -> None:
     session_db = ensure_whatsapp_session_db(settings, account_id)
@@ -135,9 +135,9 @@ async def run_whatsapp_neonize_runtime(
         if is_from_me:
             pass
 
-        if voice_message_service is not None:
+        if incoming_handler is not None:
             if is_from_me:
-                await voice_message_service.process_whatsapp_outgoing(
+                await incoming_handler.process_whatsapp_outgoing(
                     account_id=account_id,
                     neonize_client=neonize_client,
                     message_proto=message_proto,
@@ -149,7 +149,7 @@ async def run_whatsapp_neonize_runtime(
                     external_message_id=message_id,
                 )
             else:
-                await voice_message_service.process_whatsapp_incoming(
+                await incoming_handler.process_whatsapp_incoming(
                     account_id=account_id,
                     neonize_client=neonize_client,
                     message_proto=message_proto,
@@ -204,8 +204,8 @@ async def run_whatsapp_neonize_runtime(
 
     @client.event(ReceiptEv)
     async def on_receipt(_: NewAClient, event: ReceiptEv) -> None:
-        delivery_service = getattr(manager, "_delivery_service", None)
-        if not client_state.running or delivery_service is None:
+        delivery_tracker = getattr(manager, "_delivery_tracker", None)
+        if not client_state.running or delivery_tracker is None:
             return
         source = getattr(event, "MessageSource", None)
         chat_jid = getattr(source, "Chat", None) if source is not None else None
@@ -228,7 +228,7 @@ async def run_whatsapp_neonize_runtime(
         else:
             return
         try:
-            await delivery_service.mark_by_external_ids(
+            await delivery_tracker.mark_by_external_ids(
                 account_id,
                 external_chat_id=external_chat_id,
                 external_ids=message_ids,

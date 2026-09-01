@@ -12,6 +12,22 @@ from allchats_sdk.events import (
     IncomingMessageEvent,
     OutgoingMessageEvent,
 )
+from allchats_sdk.host_ports import (
+    CredentialStorage,
+    DeliveryTracker,
+    IncomingMessageHandler,
+    MediaStorage,
+)
+
+__all__ = [
+    "CredentialStorage",
+    "DeliveryTracker",
+    "EventSink",
+    "IncomingMessageHandler",
+    "MediaStorage",
+    "MessengerProvider",
+    "NullEventSink",
+]
 
 
 @runtime_checkable

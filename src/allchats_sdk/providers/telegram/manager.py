@@ -22,7 +22,12 @@ from allchats_sdk.providers.telegram.session_worker import run_telegram_session_
 from allchats_sdk.providers.credentials_cache import CredentialsCache
 from allchats_sdk.config import Settings
 from allchats_sdk.events import CredentialsUpdatedEvent, OutgoingMessageEvent
-from allchats_sdk.protocols import EventSink
+from allchats_sdk.protocols import (
+    DeliveryTracker,
+    EventSink,
+    IncomingMessageHandler,
+    MediaStorage,
+)
 from allchats_sdk.providers.telegram.entities import describe_peer, entity_avatar_url
 from allchats_sdk.credentials import telegram_authorized
 from allchats_sdk.errors import MessengerClientUnavailableError, ValidationError
@@ -82,12 +87,14 @@ class TelegramClientManager:
         self,
         settings: Settings,
         event_sink: EventSink,
-        voice_message_service: Any | None = None,
+        incoming_handler: IncomingMessageHandler | None = None,
     ) -> None:
         self._settings = settings
         self._sink = event_sink
         self._creds = CredentialsCache()
-        self._voice_message_service = voice_message_service
+        self._incoming_handler = incoming_handler
+        self._delivery_tracker: DeliveryTracker | None = None
+        self._media_storage: MediaStorage | None = None
         self._clients: dict[str, TelegramAccountClient] = {}
         self._qr_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, asyncio.Task[None]] = {}
@@ -279,7 +286,7 @@ class TelegramClientManager:
                 client_state=client,
                 manager=self,
                 event_sink=self._sink,
-                voice_message_service=self._voice_message_service,
+                incoming_handler=self._incoming_handler,
             ),
             name=f"telegram-session-{account_id[:8]}",
         )

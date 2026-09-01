@@ -16,7 +16,7 @@ from allchats_sdk.providers.vk.native_api import (
 )
 
 if TYPE_CHECKING:
-    from allchats_sdk.protocols import EventSink
+    from allchats_sdk.protocols import DeliveryTracker, EventSink, IncomingMessageHandler
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +27,10 @@ async def run_vk_longpoll_worker(
     access_token: str,
     owner_user_id: str,
     event_sink: EventSink,
-    voice_message_service: Any | None,
+    incoming_handler: IncomingMessageHandler | None,
     stop_event: asyncio.Event,
     proxies: dict[str, str] | None = None,
-    delivery_service: Any | None = None,
+    delivery_tracker: DeliveryTracker | None = None,
 ) -> None:
     logger.info("starting vk native longpoll account=%s user=%s", account_id[:8], owner_user_id)
 
@@ -68,10 +68,10 @@ async def run_vk_longpoll_worker(
             read_update = parse_read_outbox_update(update)
             if read_update is None:
                 continue
-            if delivery_service is None:
+            if delivery_tracker is None:
                 continue
             try:
-                await delivery_service.mark_up_to_external_id(
+                await delivery_tracker.mark_up_to_external_id(
                     account_id,
                     external_chat_id=read_update["external_chat_id"],
                     max_external_id=int(read_update["max_message_id"]),
@@ -127,7 +127,7 @@ async def run_vk_longpoll_worker(
                         event_sink,
                         profile_cache,
                         access_token=access_token,
-                        voice_message_service=voice_message_service,
+                        incoming_handler=incoming_handler,
                         owner_user_id=owner_user_id,
                     )
                 else:
@@ -137,7 +137,7 @@ async def run_vk_longpoll_worker(
                         event_sink,
                         profile_cache,
                         access_token=access_token,
-                        voice_message_service=voice_message_service,
+                        incoming_handler=incoming_handler,
                     )
             except Exception:
                 logger.exception(
@@ -156,7 +156,7 @@ async def _handle_incoming_message(
     profile_cache: dict[int, dict[str, str | None]],
     *,
     access_token: str,
-    voice_message_service: Any | None = None,
+    incoming_handler: IncomingMessageHandler | None = None,
 ) -> None:
     peer_id = message["peer_id"]
     from_id = message["from_id"]
@@ -176,8 +176,8 @@ async def _handle_incoming_message(
         sender_profile = profile_cache.get(from_id) or {}
         from_name = str(sender_profile.get("name") or "").strip() or None
 
-    if voice_message_service is not None:
-        await voice_message_service.process_vk_incoming(
+    if incoming_handler is not None:
+        await incoming_handler.process_vk_incoming(
             account_id=account_id,
             access_token=access_token,
             parsed=message,
@@ -226,7 +226,7 @@ async def _handle_outgoing_message(
     profile_cache: dict[int, dict[str, str | None]],
     *,
     access_token: str,
-    voice_message_service: Any | None = None,
+    incoming_handler: IncomingMessageHandler | None = None,
     owner_user_id: str = "",
 ) -> None:
     peer_id = message["peer_id"]
@@ -242,8 +242,8 @@ async def _handle_outgoing_message(
     sent_at = _message_sent_at(message)
     from_id = str(owner_user_id or message.get("from_id") or account_id)
 
-    if voice_message_service is not None:
-        await voice_message_service.process_vk_outgoing(
+    if incoming_handler is not None:
+        await incoming_handler.process_vk_outgoing(
             account_id=account_id,
             access_token=access_token,
             parsed=message,

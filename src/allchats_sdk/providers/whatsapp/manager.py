@@ -21,7 +21,7 @@ from allchats_sdk.providers.whatsapp.neonize_runtime import (
 )
 from allchats_sdk.config import Settings
 from allchats_sdk.events import ChatIdRemapEvent, CredentialsUpdatedEvent, OutgoingMessageEvent
-from allchats_sdk.protocols import EventSink
+from allchats_sdk.protocols import DeliveryTracker, EventSink, IncomingMessageHandler
 from allchats_sdk.providers.credentials_cache import CredentialsCache
 from allchats_sdk.credentials import merge_credentials, whatsapp_authorized
 from allchats_sdk.errors import MessengerClientUnavailableError, ValidationError
@@ -53,12 +53,13 @@ class WhatsAppClientManager:
         self,
         settings: Settings,
         event_sink: EventSink,
-        voice_message_service: Any | None = None,
+        incoming_handler: IncomingMessageHandler | None = None,
     ) -> None:
         self._settings = settings
         self._sink = event_sink
         self._creds = CredentialsCache()
-        self._voice_message_service = voice_message_service
+        self._incoming_handler = incoming_handler
+        self._delivery_tracker: DeliveryTracker | None = None
         self._clients: dict[str, WhatsAppAccountClient] = {}
         self._neonize_clients: dict[str, NewAClient] = {}
         self._runtime_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -157,7 +158,7 @@ class WhatsAppClientManager:
                 client_state=client,
                 manager=self,
                 event_sink=self._sink,
-                voice_message_service=self._voice_message_service,
+                incoming_handler=self._incoming_handler,
                 credentials=credentials,
             ),
             name=f"whatsapp-runtime-{account_id[:8]}",
