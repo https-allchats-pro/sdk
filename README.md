@@ -50,6 +50,17 @@ Telegram helpers:
 - ``allchats_sdk.providers.telegram.peers`` — peer ID resolution
 - ``allchats_sdk.providers.telegram.health`` — connectivity ping
 
+MAX helpers:
+
+- ``allchats_sdk.providers.max.users`` — user display name resolution
+
+## Incoming pipeline
+
+Providers emit lightweight events via ``EventSink``. Rich media (voice, photos, etc.)
+is processed by the host ``IncomingMessageHandler`` (e.g. ``VoiceMessageService``),
+which downloads media, persists messages, and publishes ``MessageReceived`` /
+``FileReceived`` to the application Event Bus.
+
 ## Storage interfaces
 
 Host implements SDK protocols (see ``allchats_sdk.host_ports``):
