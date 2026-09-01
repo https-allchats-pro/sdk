@@ -15,6 +15,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
 telegram = [
   "telethon>=1.36.0",
   "ntgcalls>=3.0.0b4",
@@ -49,6 +52,10 @@ avito = [
 all = [
   "allchats-sdk[telegram,vk,max,whatsapp,discord,avito]",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

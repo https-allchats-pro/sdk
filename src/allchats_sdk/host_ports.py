@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable, runtime_checkable
 
 
 @runtime_checkable
@@ -49,6 +49,7 @@ class DeliveryTracker(Protocol):
     ) -> None: ...
 
 
+@runtime_checkable
 class IncomingMessageHandler(Protocol):
     """Host handler for rich incoming/outgoing media messages.
 
