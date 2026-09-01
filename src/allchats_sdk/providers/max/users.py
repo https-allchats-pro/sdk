@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 
-def _user_display_name(user: Any) -> str | None:
+def max_user_display_name(user: Any) -> str | None:
+    """Extract display name from a MAX user object already loaded in memory."""
     names = getattr(user, "names", None) or []
     for item in names:
         full = str(getattr(item, "name", "") or "").strip()
@@ -36,7 +37,7 @@ async def resolve_max_user_display_name(client: Any, user_id: int | str | None) 
                 continue
         except (TypeError, ValueError):
             continue
-        return _user_display_name(user)
+        return max_user_display_name(user)
     return None
 
 
@@ -61,7 +62,7 @@ async def resolve_max_user_display_names(
     except Exception:
         return resolved
     for user in users or []:
-        name = _user_display_name(user)
+        name = max_user_display_name(user)
         if not name:
             continue
         try:

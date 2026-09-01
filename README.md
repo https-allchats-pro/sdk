@@ -96,7 +96,7 @@ Telegram helpers:
 
 MAX helpers:
 
-- ``allchats_sdk.providers.max.users`` — user display name resolution
+- ``allchats_sdk.providers.max.users`` — ``max_user_display_name``, ``resolve_max_user_display_name(s)``
 
 ## Credentials
 
