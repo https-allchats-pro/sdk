@@ -21,9 +21,8 @@ pip install -e "./allchats-sdk[telegram,vk]"
 ## Quick start
 
 ```python
-from allchats_sdk import default_registry
+from allchats_sdk import MessengerClient, NullEventSink, default_registry
 from allchats_sdk.providers.register import register_builtin_providers
-from allchats_sdk.protocols import NullEventSink
 
 register_builtin_providers()
 manager = default_registry.create(
@@ -31,6 +30,21 @@ manager = default_registry.create(
     settings=settings,
     event_sink=NullEventSink(),
 )
+
+# Per-account facade
+client = MessengerClient.from_provider("telegram", account_id, manager)
+await client.connect(credentials)
+message_id, chat_id = await client.messages.send("hello", chat_id="123")
+```
+
+For MAX (host-managed sessions via SessionManager):
+
+```python
+from allchats_sdk import MaxMessengerClient
+
+max_client = MaxMessengerClient(account_id, session_host=session_manager)
+await max_client.connect()
+await max_client.messages.send("hello", chat_id="12345")
 ```
 
 ## Providers
@@ -79,6 +93,19 @@ Providers emit events through `EventSink`:
 - `on_connection_state` — auth/runtime state
 - `on_chats_discovered` — initial chat sync
 - `on_chat_id_remap` — e.g. WhatsApp LID↔PN
+
+## MessengerClient facade
+
+Capability-based per-account API over registry providers:
+
+- ``MessengerClient`` — wraps ``ProviderRegistry`` managers (telegram, vk, whatsapp, …)
+- ``MaxMessengerClient`` — adapter over host ``SessionManager`` for MAX
+- ``client.messages`` — send text messages
+- ``client.chats`` — client state / sync (when supported)
+- ``client.auth`` — connect, QR, disconnect (when supported)
+- ``client.connect()`` / ``client.disconnect()`` — session lifecycle shortcuts
+
+Unsupported capabilities raise ``UnsupportedCapabilityError``.
 
 ## Development
 

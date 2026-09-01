@@ -19,6 +19,13 @@ class SessionNotConnectedError(MessengerError):
         self.status = status
 
 
+class UnsupportedCapabilityError(MessengerError):
+    def __init__(self, provider: str, capability: str) -> None:
+        super().__init__(f"provider '{provider}' does not support '{capability}'")
+        self.provider = provider
+        self.capability = capability
+
+
 def is_telegram_rpc_error(exc: BaseException) -> bool:
     try:
         from telethon.errors import RPCError
