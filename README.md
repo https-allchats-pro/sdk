@@ -220,3 +220,20 @@ from allchats_sdk.events import IncomingMessageEvent
 ```
 
 The `messenger_sdk` namespace remains as a compatibility shim in `backend/packages/messenger-sdk` (top-level exports only).
+
+## Monorepo / CI
+
+Docker builds expect this layout at the build context root:
+
+```text
+.
+├── backend/
+│   ├── Dockerfile
+│   ├── requirements.txt   # -e ../allchats-sdk[all]
+│   └── internal/
+└── allchats-sdk/
+```
+
+- **allchats-infra** local compose: `context: ..`, `dockerfile: backend/Dockerfile`
+- **backend** CI: checks out `backend/` and `allchats-sdk/` into the same workspace root
+- **backend** `docker-compose.yml`: `context: ..` (sibling `allchats-sdk` required)
