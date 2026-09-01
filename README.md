@@ -44,6 +44,12 @@ manager = default_registry.create(
 | WhatsApp | `[whatsapp]` | QR (neonize) |
 | Discord | `[discord]` | QR, login |
 
+Telegram helpers:
+
+- ``allchats_sdk.providers.telegram.contacts`` — contact search
+- ``allchats_sdk.providers.telegram.peers`` — peer ID resolution
+- ``allchats_sdk.providers.telegram.health`` — connectivity ping
+
 ## Storage interfaces
 
 Host implements SDK protocols (see ``allchats_sdk.host_ports``):

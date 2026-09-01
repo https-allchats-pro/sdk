@@ -17,3 +17,11 @@ class SessionNotConnectedError(MessengerError):
     def __init__(self, status: str) -> None:
         super().__init__(f"Session is not connected: {status}")
         self.status = status
+
+
+def is_telegram_rpc_error(exc: BaseException) -> bool:
+    try:
+        from telethon.errors import RPCError
+    except ImportError:
+        return False
+    return isinstance(exc, RPCError)
