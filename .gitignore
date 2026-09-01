@@ -1,0 +1,19 @@
+# Build artifacts
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg
+
+# Local logs
+src/logs/
+*.trace.log
+
+# Test / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
