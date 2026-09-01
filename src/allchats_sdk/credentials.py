@@ -256,18 +256,3 @@ def avito_sync_started_at_ms(
     if fallback is not None:
         return int(fallback.timestamp() * 1000)
     return None
-
-
-def account_to_response(account: Any) -> dict[str, Any]:
-    credentials = account.credentials or {}
-    return {
-        "id": account.id,
-        "messenger_type": account.messenger_type,
-        "nickname": account.nickname,
-        "avatar_url": account_avatar_url(credentials),
-        "credentials": sanitize_credentials(credentials),
-        "is_active": account.is_active,
-        "is_authorized": is_authorized(credentials, account.messenger_type),
-        "created_at": account.created_at.isoformat() if account.created_at else None,
-        "updated_at": account.updated_at.isoformat() if account.updated_at else None,
-    }
