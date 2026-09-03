@@ -9,6 +9,10 @@ from allchats_sdk.providers.vk.native_api import vk_method, vk_method_async
 
 # Browser search/catalog UI uses a newer API version than messaging defaults.
 CATALOG_API_VERSION = "5.288"
+NEWSFEED_API_VERSION = "5.199"
+
+# newsfeed.search rejects empty q; a single space returns a broad global feed.
+DEFAULT_NEWSFEED_SEARCH_Q = " "
 
 
 @dataclass(frozen=True)
@@ -28,11 +32,16 @@ def _as_optional_str(value: Any) -> str | None:
 
 
 def extract_next_from(payload: Any) -> str | None:
-    """Pull pagination cursor from known catalog response shapes."""
+    """Pull pagination cursor from known catalog response shapes.
+
+    Only ``next_from`` / ``nextFrom`` are treated as the *next* page cursor.
+    Do not read ``start_from`` here — VK often echoes the request cursor, which
+    would stall pagination after the first page.
+    """
     if not isinstance(payload, dict):
         return None
 
-    for key in ("next_from", "nextFrom", "start_from"):
+    for key in ("next_from", "nextFrom"):
         found = _as_optional_str(payload.get(key))
         if found:
             return found
@@ -51,12 +60,14 @@ def extract_next_from(payload: Any) -> str | None:
                         if not isinstance(block, dict):
                             continue
                         if str(block.get("data_type") or "") == "newsfeed_items":
-                            found = _as_optional_str(block.get("next_from"))
+                            found = _as_optional_str(block.get("next_from") or block.get("nextFrom"))
                             if found:
                                 return found
                     for block in blocks:
                         if isinstance(block, dict):
-                            found = _as_optional_str(block.get("next_from"))
+                            found = _as_optional_str(
+                                block.get("next_from") or block.get("nextFrom")
+                            )
                             if found:
                                 return found
                 found = extract_next_from(section)
@@ -183,6 +194,49 @@ async def get_search_statuses_async(
         response=response,
         next_from=extract_next_from(response),
         method="catalog.getSearchStatuses",
+    )
+
+
+def get_newsfeed_search(
+    *,
+    access_token: str,
+    count: int = 50,
+    start_from: str | None = None,
+    q: str | None = None,
+    api_version: str = NEWSFEED_API_VERSION,
+    proxies: dict[str, str] | None = None,
+    **extra: object,
+) -> CatalogSearchTopPage:
+    """Call ``newsfeed.search`` — wall posts with real ``next_from`` pagination.
+
+    Unlike ``catalog.getSearchStatuses`` (UI catalog, ~15–20 unique posts and a
+    non-advancing cursor), this endpoint paginates cleanly and reports
+    ``total_count`` in the thousands for typical queries.
+    """
+    query = str(q).strip() if q is not None else ""
+    if not query:
+        query = DEFAULT_NEWSFEED_SEARCH_Q
+    params: dict[str, object] = {
+        "q": query,
+        "count": max(1, min(200, int(count))),
+        "v": api_version,
+    }
+    if start_from:
+        params["start_from"] = start_from
+    params.update(extra)
+
+    response = _normalize_response(
+        vk_method(
+            "newsfeed.search",
+            access_token=access_token,
+            proxies=proxies,
+            **params,
+        )
+    )
+    return CatalogSearchTopPage(
+        response=response,
+        next_from=extract_next_from(response),
+        method="newsfeed.search",
     )
 
 
