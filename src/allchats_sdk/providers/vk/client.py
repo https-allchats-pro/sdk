@@ -25,10 +25,24 @@ DEFAULT_SCOPES = ""
 
 
 class VkApiError(Exception):
-    def __init__(self, message: str, *, status: int | None = None, body: Any = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        body: Any = None,
+        error_code: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.body = body
+        self.error_code = error_code
+
+    @property
+    def is_rate_limit(self) -> bool:
+        from allchats_sdk.providers.vk.native_api import VK_RATE_LIMIT_ERROR_CODES
+
+        return self.error_code in VK_RATE_LIMIT_ERROR_CODES
 
 
 def normalize_scopes(scopes: str) -> str:
@@ -118,7 +132,7 @@ async def vk_api_call(
             **(params or {}),
         )
     except VkNativeApiError as exc:
-        raise VkApiError(str(exc)) from exc
+        raise VkApiError(str(exc), error_code=exc.error_code, body=exc.error) from exc
 
 
 async def get_user_info(*, access_token: str, proxies: dict[str, str] | None = None) -> dict[str, Any]:

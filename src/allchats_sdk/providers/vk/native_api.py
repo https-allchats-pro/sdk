@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import html
+import logging
 import random
+import time
 from enum import IntEnum
 from typing import Any
 
@@ -22,9 +24,34 @@ CHAT_START_ID = int(2e9)
 LONGPOLL_WAIT_SEC = 25
 LONGPOLL_MODE = 2 + 8 + 32 + 64 + 128
 
+# VK: 6 = Too many requests per second; 29 = Rate limit reached
+VK_RATE_LIMIT_ERROR_CODES = frozenset({6, 29})
+DEFAULT_VK_RETRIES = 3
+DEFAULT_VK_RETRY_BACKOFF_SEC = 0.5
+
+logger = logging.getLogger(__name__)
+
 
 class VkNativeApiError(Exception):
-    pass
+    """VK API method error.
+
+    ``error_code`` is the numeric VK ``error.error_code`` when present.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: int | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.error = error or {}
+
+    @property
+    def is_rate_limit(self) -> bool:
+        return self.error_code in VK_RATE_LIMIT_ERROR_CODES
 
 
 class VkMessageFlag(IntEnum):
@@ -65,34 +92,73 @@ def api_headers() -> dict[str, str]:
     }
 
 
+def _raise_vk_error(error: Any) -> None:
+    if isinstance(error, dict):
+        message = str(error.get("error_msg") or "vk api error")
+        raw_code = error.get("error_code")
+        try:
+            error_code = int(raw_code) if raw_code is not None else None
+        except (TypeError, ValueError):
+            error_code = None
+        raise VkNativeApiError(message, error_code=error_code, error=error)
+    raise VkNativeApiError(str(error) or "vk api error")
+
+
 def vk_method(
     method: str,
     *,
     access_token: str | None = None,
     proxies: dict[str, str] | None = None,
+    retries: int = DEFAULT_VK_RETRIES,
+    retry_backoff: float = DEFAULT_VK_RETRY_BACKOFF_SEC,
     **params: object,
 ) -> Any:
-    payload = {key: str(value) for key, value in params.items()}
-    payload["v"] = API_VERSION
+    """Call a VK API method with optional retries on rate-limit errors.
+
+    Pass ``v`` in ``params`` to override the default API version.
+    """
+    payload = {key: str(value) for key, value in params.items() if key != "v"}
+    api_version = params.get("v", API_VERSION)
+    payload["v"] = str(api_version if api_version is not None else API_VERSION)
     if access_token:
         payload["access_token"] = access_token
 
-    response = requests.post(
-        f"{API_BASE}/{method}",
-        data=payload,
-        headers=api_headers(),
-        timeout=30,
-        proxies=proxies,
-    )
-    response.raise_for_status()
-    data = response.json()
+    attempts = max(0, int(retries)) + 1
+    last_error: VkNativeApiError | None = None
 
-    if "error" in data:
-        error = data["error"]
-        message = error.get("error_msg") if isinstance(error, dict) else str(error)
-        raise VkNativeApiError(message or "vk api error")
+    for attempt in range(attempts):
+        response = requests.post(
+            f"{API_BASE}/{method}",
+            data=payload,
+            headers=api_headers(),
+            timeout=30,
+            proxies=proxies,
+        )
+        response.raise_for_status()
+        data = response.json()
 
-    return data["response"]
+        if "error" not in data:
+            return data["response"]
+
+        try:
+            _raise_vk_error(data["error"])
+        except VkNativeApiError as exc:
+            last_error = exc
+            if not exc.is_rate_limit or attempt >= attempts - 1:
+                raise
+            delay = retry_backoff * (2**attempt)
+            logger.warning(
+                "vk rate limit method=%s code=%s attempt=%s/%s sleep=%.2fs",
+                method,
+                exc.error_code,
+                attempt + 1,
+                attempts,
+                delay,
+            )
+            time.sleep(delay)
+
+    assert last_error is not None
+    raise last_error
 
 
 async def vk_method_async(
@@ -100,6 +166,8 @@ async def vk_method_async(
     *,
     access_token: str | None = None,
     proxies: dict[str, str] | None = None,
+    retries: int = DEFAULT_VK_RETRIES,
+    retry_backoff: float = DEFAULT_VK_RETRY_BACKOFF_SEC,
     **params: object,
 ) -> Any:
     return await asyncio.to_thread(
@@ -107,6 +175,8 @@ async def vk_method_async(
         method,
         access_token=access_token,
         proxies=proxies,
+        retries=retries,
+        retry_backoff=retry_backoff,
         **params,
     )
 

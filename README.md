@@ -94,6 +94,12 @@ Telegram helpers:
 - ``allchats_sdk.providers.telegram.peers`` — peer ID resolution
 - ``allchats_sdk.providers.telegram.health`` — connectivity ping
 
+VK helpers:
+
+- ``allchats_sdk.providers.vk.wall`` — ``resolve_group`` / ``resolve_group_async``, ``iter_wall_posts`` / ``iter_wall_posts_sync``
+- ``allchats_sdk.providers.vk.catalog`` — ``get_search_statuses`` (wall posts via ``catalog.getSearchStatuses``), ``get_search_top`` (search UI people/groups)
+- ``allchats_sdk.providers.vk.native_api.vk_method`` — low-level VK RPC with ``error_code`` and rate-limit retries (codes 6 / 29); pass ``v=`` to override API version
+
 MAX helpers:
 
 - ``allchats_sdk.providers.max.users`` — ``max_user_display_name``, ``resolve_max_user_display_name(s)``
