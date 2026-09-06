@@ -203,6 +203,8 @@ def get_newsfeed_search(
     count: int = 50,
     start_from: str | None = None,
     q: str | None = None,
+    start_time: int | None = None,
+    end_time: int | None = None,
     api_version: str = NEWSFEED_API_VERSION,
     proxies: dict[str, str] | None = None,
     **extra: object,
@@ -212,6 +214,8 @@ def get_newsfeed_search(
     Unlike ``catalog.getSearchStatuses`` (UI catalog, ~15–20 unique posts and a
     non-advancing cursor), this endpoint paginates cleanly and reports
     ``total_count`` in the thousands for typical queries.
+
+    ``start_time`` / ``end_time`` are unix seconds (VK defaults to ~last day).
     """
     query = str(q).strip() if q is not None else ""
     if not query:
@@ -223,6 +227,10 @@ def get_newsfeed_search(
     }
     if start_from:
         params["start_from"] = start_from
+    if start_time is not None:
+        params["start_time"] = max(0, int(start_time))
+    if end_time is not None:
+        params["end_time"] = max(0, int(end_time))
     params.update(extra)
 
     response = _normalize_response(
