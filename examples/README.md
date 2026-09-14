@@ -1,6 +1,10 @@
 # Examples
 
-These scripts are the fastest way to learn the public SDK API.
+Focused scripts that mirror real usage of the public API.
+
+```bash
+pip install "allchats-sdk[telegram]"   # or [vk] / [max]
+```
 
 Prefer:
 
@@ -12,7 +16,6 @@ from allchats_sdk import FileCredentialStore
 ## Telegram
 
 ```bash
-pip install -e ".[telegram]"
 export TELEGRAM_APP_ID=… TELEGRAM_APP_HASH=…
 ```
 
@@ -22,11 +25,12 @@ export TELEGRAM_APP_ID=… TELEGRAM_APP_HASH=…
 | [`telegram/reconnect.py`](telegram/reconnect.py) | Connect from saved session file |
 | [`telegram/send_message.py`](telegram/send_message.py) | Send text (`TELEGRAM_CHAT_ID`) |
 | [`telegram/receive_messages.py`](telegram/receive_messages.py) | Print incoming messages |
+| [`telegram/inspect_capabilities.py`](telegram/inspect_capabilities.py) | Probe `auth` / `messages` / `chats` |
 
 ## VK
 
 ```bash
-pip install -e ".[vk]"
+pip install "allchats-sdk[vk]"
 ```
 
 | Script | What it does |
@@ -40,7 +44,7 @@ pip install -e ".[vk]"
 
 ## MAX
 
-MAX sessions are owned by the host (`SessionManager`). Wire `get_session_host()` in:
+MAX sessions are owned by the host (`SessionManager`). Wire `get_session_host()`:
 
 | Script | What it shows |
 |--------|----------------|
@@ -56,6 +60,7 @@ MAX sessions are owned by the host (`SessionManager`). Wire `get_session_host()`
 
 ## Tips
 
-- Session files default to `./telegram-session.json` / `./vk-session.json` (override with `*_SESSION_FILE`).
-- Keep secrets in env vars; do not commit session JSON.
-- Account clients persist credentials automatically when you pass `credential_store=`.
+- Override session paths with `TELEGRAM_SESSION_FILE` / `VK_SESSION_FILE`.
+- Do not commit `*-session.json` or `.env`.
+- Pass `credential_store=` for automatic session persistence.
+- Docs: [`docs/getting-started.md`](../docs/getting-started.md).

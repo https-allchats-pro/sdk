@@ -1,24 +1,28 @@
 # AllChats SDK
 
-Universal Python SDK for messenger integrations.
+Unified Python SDK for messaging platforms.
 
-Connect Telegram, VK, MAX (and more) with one account-oriented API: auth, send,
-receive, and session persistence — without FastAPI, PostgreSQL, or app domain code.
+Connect Telegram, VK, MAX, and other messengers through one account-oriented API:
+authenticate, send, receive events, and persist sessions — without FastAPI or a database.
+
+[![PyPI](https://img.shields.io/pypi/v/allchats-sdk.svg)](https://pypi.org/project/allchats-sdk/)
+[![Python](https://img.shields.io/pypi/pyversions/allchats-sdk.svg)](https://pypi.org/project/allchats-sdk/)
+[![CI](https://github.com/https-allchats-pro/sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/https-allchats-pro/sdk/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Installation
 
 ```bash
 pip install allchats-sdk
+
+# provider-specific integrations
 pip install "allchats-sdk[telegram]"
 pip install "allchats-sdk[vk]"
 pip install "allchats-sdk[max]"
-pip install "allchats-sdk[telegram,vk,max]"
+pip install "allchats-sdk[telegram,vk]"
 ```
 
-The base package is minimal (clients, models, credential store). Messenger
-runtimes are optional extras.
-
-Requires **Python 3.11+**.
+Requires **Python 3.11+**. The base install is minimal; messenger runtimes are optional extras.
 
 ## Quick start
 
@@ -31,191 +35,73 @@ async def main() -> None:
     store = FileCredentialStore("./telegram-session.json")
     client = TelegramClient(
         account_id="acc-1",
-        app_id=12345,          # https://my.telegram.org/apps
+        app_id=12345,  # https://my.telegram.org/apps
         app_hash="your_app_hash",
         credential_store=store,
     )
 
     await client.auth.start_qr()
-    status = await client.auth.wait_until_authorized(
+    await client.auth.wait_until_authorized(
         password_provider=lambda: input("2FA password: "),
     )
-    print("authorized", status.user_id)
 
     await client.connect()
     message_id, chat_id = await client.messages.send("hello", chat_id="123456789")
-    print("sent", message_id, chat_id)
+    print(message_id, chat_id)
     await client.disconnect()
 
 asyncio.run(main())
 ```
 
-Same idea for VK:
-
-```python
-from allchats_sdk.vk import VKClient
-from allchats_sdk import FileCredentialStore
-
-store = FileCredentialStore("./vk-session.json")
-client = VKClient(account_id="acc-1", app_id="12345678", credential_store=store)
-await client.auth.start_qr()
-await client.auth.wait_until_authorized()
-```
-
-Runnable scripts: [`examples/`](examples/README.md).
-
-## Features
-
-- **Account clients** — `TelegramClient`, `VKClient`, `MAXClient`
-- **Session persistence** — `FileCredentialStore` / `MemoryCredentialStore` (no custom sink required)
-- **Typed auth state** — `ConnectionState`, `wait_until_authorized(...)`
-- **Capabilities** — `client.auth`, `client.messages`, `client.chats`
-- **Optional EventSink** — observe incoming/outgoing messages when you need them
-- **Host protocols** — plug into a backend (`EventSink`, media, delivery) without coupling the SDK to your app
+More scripts: [`examples/`](examples/README.md).
 
 ## Supported messengers
 
-| Messenger | Extra | Auth | Notes |
-|-----------|-------|------|--------|
-| Telegram | `[telegram]` | QR, 2FA password | Preferred public API |
-| VK | `[vk]` | QR, token, VK ID OAuth | Preferred public API |
-| MAX | `[max]` | QR, SMS | Needs host `SessionManager` as `session_host` |
-| WhatsApp | `[whatsapp]` | QR (neonize) | Advanced / host |
-| Discord | `[discord]` | QR, login | Advanced / host |
-| Avito | `[avito]` | OAuth | Advanced / host |
+| Provider | Extra | Public client | Status |
+|----------|-------|---------------|--------|
+| Telegram | `[telegram]` | `TelegramClient` | First-class |
+| VK | `[vk]` | `VKClient` | First-class |
+| MAX | `[max]` | `MAXClient` | Host `session_host` required |
+| WhatsApp | `[whatsapp]` | — | Manager / host (no public client yet) |
+| Discord | `[discord]` | — | Manager / host (no public client yet) |
+| Avito | `[avito]` | — | Manager / host (no public client yet) |
 
-```bash
-pip install "allchats-sdk[all]"   # every extra
-```
+Capability details: [`docs/capabilities.md`](docs/capabilities.md).
 
-## Authentication
+## Capabilities
 
-### Telegram (QR)
+Account clients expose capability groups via properties:
 
 ```python
-from allchats_sdk.telegram import TelegramClient
-from allchats_sdk import FileCredentialStore
+client.auth       # connect, QR, disconnect, …
+client.messages   # send
+client.chats      # client_state / sync (when supported)
 
-store = FileCredentialStore("./telegram-session.json")
-client = TelegramClient(
-    account_id="acc-1",
-    app_id=12345,
-    app_hash="…",
-    credential_store=store,
-)
-
-qr = await client.auth.start_qr()
-print(qr.qr_link)  # scan in Telegram → Devices
-
-status = await client.auth.wait_until_authorized(
-    password_provider=lambda: input("2FA password: "),
-)
-# status.state == ConnectionState.AUTHORIZED
+from allchats_sdk import Capability
+list(Capability)  # messages, chats, auth
 ```
 
-Reconnect later (session already on disk):
+Unsupported groups raise `UnsupportedCapabilityError`. There is no `client.capabilities` list API — probe the properties you need.
 
-```python
-status = await client.connect()  # loads from credential_store
-```
+## Documentation
 
-### VK
+| Guide | Description |
+|-------|-------------|
+| [Getting started](docs/getting-started.md) | Install → connect → send / receive |
+| [Architecture](docs/architecture.md) | Public vs internal layers |
+| [Authentication](docs/authentication.md) | QR, token, OAuth, MAX host |
+| [Events](docs/events.md) | `EventSink` and event types |
+| [Capabilities](docs/capabilities.md) | Matrix + how to probe |
+| [Credentials](docs/credentials.md) | Stores and sanitization |
+| [Errors](docs/errors.md) | Exception hierarchy |
+| [Security](docs/security.md) | Sessions, logging, reporting |
+| [Providers](docs/providers/) | Per-messenger notes |
 
-```python
-from allchats_sdk.vk import VKClient
+## Security
 
-client = VKClient(account_id="acc-1", app_id="…", credential_store=store)
+Do not commit session files or tokens. See [`SECURITY.md`](SECURITY.md) and [`docs/security.md`](docs/security.md).
 
-await client.auth.start_qr()
-# or: await client.auth.connect_with_token(access_token)
-# or: url = client.auth.build_oauth_url(); … connect_with_oauth_code(...)
-
-await client.auth.wait_until_authorized()
-```
-
-### MAX
-
-MAX sessions are owned by the host application:
-
-```python
-from allchats_sdk.max import MAXClient
-
-client = MAXClient(account_id="acc-1", session_host=session_manager)
-await client.connect()
-await client.auth.start_qr(credentials)
-```
-
-See [`examples/max/`](examples/max/).
-
-## Sending messages
-
-```python
-await client.connect()
-
-message_id, chat_id = await client.messages.send(
-    "hello",
-    chat_id="123456789",
-)
-```
-
-Telegram also accepts `phone_number=` where supported by the provider.
-Catch `AllChatsError` (and subclasses) at application boundaries.
-
-## Receiving events
-
-Pass an `event_sink` to observe traffic. Credentials still persist via
-`credential_store`.
-
-```python
-class PrintIncoming:
-    async def on_incoming(self, event) -> None:
-        print(f"{event.external_chat_id} ← {event.from_id}: {event.text}")
-
-    async def on_outgoing(self, event) -> None: ...
-    async def on_credentials_updated(self, event) -> None: ...
-    async def on_connection_state(self, event) -> None: ...
-    async def on_chats_discovered(self, event) -> None: ...
-    async def on_chat_id_remap(self, event) -> None: ...
-
-client = TelegramClient(
-    ...,
-    credential_store=store,
-    event_sink=PrintIncoming(),
-)
-await client.connect()
-# keep the process running while the provider listens
-```
-
-Full example: [`examples/telegram/receive_messages.py`](examples/telegram/receive_messages.py).
-
-Hosts that need rich media (voice/files) implement `IncomingMessageHandler` /
-`MediaStorage` from `allchats_sdk.protocols`.
-
-## Architecture
-
-```text
-Your app
-  └── TelegramClient / VKClient / MAXClient
-        └── Provider (TelegramProvider, …)
-              └── messenger network (Telethon, vk-api, …)
-
-Optional host (backend)
-  └── implements protocols (EventSink, MediaStorage, …)
-```
-
-- **Public:** `allchats_sdk`, `allchats_sdk.telegram`, `.vk`, `.max`
-- **Internal:** `allchats_sdk.internal.*` (registry, hooks, observability, runtime)
-- Dependency direction is always **app/host → SDK → external APIs** — the SDK never imports your application code.
-
-Stack for Telegram:
-
-```text
-TelegramClient → TelegramProvider → MessengerClient → Telethon
-                     ↑
-              CredentialStore / PersistingEventSink
-```
-
-## Development
+## Contributing
 
 ```bash
 git clone https://github.com/https-allchats-pro/sdk.git
@@ -224,35 +110,9 @@ pip install -e ".[all,dev]"
 pytest
 ```
 
-```text
-tests/
-├── unit/
-├── providers/
-└── integration/
-```
-
-Examples and local install from a monorepo checkout:
-
-```bash
-pip install -e "./allchats-sdk[telegram,vk]"
-python examples/telegram/connect_qr.py
-```
-
-### Publishing
-
-```bash
-pip install -e ".[dev]"
-python -m build
-twine check dist/*
-twine upload --repository testpypi dist/*   # TestPyPI
-twine upload dist/*                         # PyPI
-```
-
-Use API tokens (`username = __token__`). Never commit tokens.
-
-### Versioning
-
-SemVer. Current version: **0.1.0**.
+- Prefer public imports (`allchats_sdk`, `allchats_sdk.telegram`, …).
+- Do not rely on `allchats_sdk.internal` in application code.
+- Open a PR against `main`; CI must pass.
 
 ## License
 

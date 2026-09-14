@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "allchats-sdk"
-version = "0.1.0"
+version = "0.1.1"
 description = "Messenger integrations SDK (Telegram, VK, MAX, Avito, Discord, WhatsApp)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -46,7 +46,7 @@ dependencies = [
 Homepage = "https://github.com/https-allchats-pro/sdk"
 Repository = "https://github.com/https-allchats-pro/sdk"
 Issues = "https://github.com/https-allchats-pro/sdk/issues"
-Documentation = "https://github.com/https-allchats-pro/sdk#readme"
+Documentation = "https://github.com/https-allchats-pro/sdk/tree/main/docs"
 
 [project.optional-dependencies]
 dev = [
