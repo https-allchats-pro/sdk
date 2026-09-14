@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Messenger integrations SDK (Telegram, VK, MAX, Avito, Discord, WhatsApp)"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Proprietary" }
+license = { text = "MIT" }
 authors = [{ name = "messager.shop" }]
 dependencies = [
   "pydantic>=2.0",
