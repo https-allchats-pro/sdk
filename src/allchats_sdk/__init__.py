@@ -4,7 +4,8 @@ Public API (stable)
 -------------------
 Preferred account clients::
 
-    from allchats_sdk import TelegramClient, FileCredentialStore
+    from allchats_sdk.telegram import TelegramClient
+    from allchats_sdk import FileCredentialStore
 
     store = FileCredentialStore("./telegram-session.json")
     client = TelegramClient(
@@ -14,6 +15,7 @@ Preferred account clients::
         credential_store=store,
     )
 
+Root imports (``from allchats_sdk import TelegramClient``) also work.
 Lower-level typed providers + ``MessengerClient`` remain available for hosts.
 The registry is an internal SDK mechanism.
 """

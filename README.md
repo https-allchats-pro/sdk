@@ -45,7 +45,8 @@ pip install -e "./allchats-sdk[all,dev]"
 Preferred **account clients** with automatic session persistence:
 
 ```python
-from allchats_sdk import TelegramClient, FileCredentialStore
+from allchats_sdk.telegram import TelegramClient
+from allchats_sdk import FileCredentialStore
 
 store = FileCredentialStore("./telegram-session.json")
 client = TelegramClient(
@@ -61,6 +62,9 @@ status = await client.auth.wait_until_authorized(
 # status.state is ConnectionState.AUTHORIZED
 await client.connect()  # loads credentials from store
 ```
+
+Equivalent root import: ``from allchats_sdk import TelegramClient``.
+Provider shortcuts: ``allchats_sdk.telegram``, ``allchats_sdk.vk``, ``allchats_sdk.max``.
 
 You do **not** need a custom ``EventSink`` or manual credential extraction for normal usage.
 Pass ``event_sink=`` only when the host must observe messages/state.
@@ -310,17 +314,17 @@ pytest
 python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-Test coverage:
+Test layout:
 
-- ``tests/test_public_api.py`` — package-root public exports
-- ``tests/test_connection_state.py`` — typed ConnectionState + wait_until_authorized
-- ``tests/test_credential_store.py`` — File/MemoryCredentialStore + persisting sink
-- ``tests/test_registry.py`` — provider registry
-- ``tests/test_credentials.py`` — authorization, sanitize, merge
-- ``tests/test_events.py`` — event payload shapes
-- ``tests/test_protocols.py`` — host ports and capability protocols
-- ``tests/test_messenger_client.py`` — MessengerClient / MaxMessengerClient
-- ``tests/test_errors.py`` — exception helpers
+```text
+tests/
+├── unit/           # credentials, events, registry, public root API, …
+├── providers/      # telegram / vk / max public clients + provider helpers
+└── integration/    # installed-package import paths
+```
+
+Prefer public entrypoints in tests (``from allchats_sdk.telegram import TelegramClient``),
+not only internal classes.
 
 ## Versioning
 

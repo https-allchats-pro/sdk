@@ -56,6 +56,9 @@ all = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["*Tests", "Test*"]
+python_functions = ["test_*"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

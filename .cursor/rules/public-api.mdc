@@ -1,0 +1,106 @@
+---
+description: allchats-sdk public API boundary — prefer package-root imports
+globs: allchats-sdk/**/*
+alwaysApply: false
+---
+
+# allchats-sdk Public API
+
+## Preferred usage — account clients + CredentialStore
+
+```python
+from allchats_sdk.telegram import TelegramClient
+from allchats_sdk import FileCredentialStore
+
+store = FileCredentialStore("./telegram-session.json")
+client = TelegramClient(
+    account_id="acc-1",
+    app_id=12345,
+    app_hash="...",
+    credential_store=store,
+)
+await client.auth.start_qr()
+status = await client.auth.wait_until_authorized(
+    password_provider=lambda: input("2FA password: "),
+)
+# status.state == ConnectionState.AUTHORIZED
+await client.connect()  # loads from store
+```
+
+Also valid: ``from allchats_sdk import TelegramClient`` /
+``from allchats_sdk.vk import VKClient`` / ``from allchats_sdk.max import MAXClient``.
+
+Do **not** require app/example code to implement ``EventSink`` or manually
+read ``credentials_by_account`` for normal session persistence.
+
+Internal stack:
+
+```text
+TelegramClient → TelegramProvider → MessengerClient → Telegram
+                     ↑
+              CredentialStore / PersistingEventSink
+```
+
+## Naming
+
+| Prefer | Avoid / legacy |
+|--------|----------------|
+| ``TelegramProvider`` | ``TelegramClientManager`` (``manager.py`` shim) |
+| ``allchats_sdk.protocols`` | ``host_ports``, ``host`` |
+| ``allchats_sdk.internal.*`` | top-level ``registry`` / ``hooks`` / ``observability`` |
+| account clients + ``CredentialStore`` | manual ``EventSink`` for normal persistence |
+
+## Provider package layout
+
+Each messenger package follows the same shape:
+
+```text
+providers/<name>/
+  __init__.py      # exports <Name>Provider
+  provider.py      # multi-account runtime (conceptual API)
+  client.py        # low-level transport / account state (≠ public clients.*)
+  auth.py          # auth flows / callbacks
+  manager.py       # BC shim → provider (telegram/vk)
+```
+
+Conceptual provider API (shared): ``connect_account``, ``start_qr``, ``disconnect``,
+``send_message``, ``client_for_account`` (+ provider-specific extras).
+
+Public account facades stay in ``allchats_sdk.clients`` (``TelegramClient``, …).
+
+## Do not reach for internals
+
+Avoid in app / example / public-facing code:
+
+```python
+from allchats_sdk.internal.registry import ...
+from allchats_sdk.internal.hooks import ...
+from allchats_sdk.internal.observability import ...
+from allchats_sdk.internal.runtime import ...
+from allchats_sdk.registry import ...          # legacy shim
+from allchats_sdk.host import ...              # legacy shim
+from allchats_sdk.host_ports import ...        # legacy shim
+from allchats_sdk.hooks import ...             # legacy shim
+from allchats_sdk.providers.register import ...
+from allchats_sdk.providers.telegram.manager import ...
+```
+
+Host integrations that implement protocols should import from ``allchats_sdk.protocols``.
+Host wiring (metrics, speech, builtin registration) may use ``allchats_sdk.internal``.
+
+## Models / types layout
+
+- ``models.py`` — public DTOs (`Message`, `Chat`, `Account`, `ConnectionState`, …).
+  Keep as **one file** while it stays small. Split into ``models/`` only when
+  navigation hurts — do not pre-create message.py / chat.py / …
+- ``types/`` — **internal** provider helpers (media/voice/audio/chat metadata).
+  Already a package; import from submodules. Do not split further early.
+
+## When editing the SDK
+
+- Prefer extending account clients + ``CredentialStore`` for end-user APIs.
+- Keep `__all__` in `__init__.py` as the source of truth for the public API.
+- New protocol types go in ``protocols/``; keep ``host_ports`` / ``host`` as shims only.
+- Non-public modules go under ``internal/``; leave thin top-level shims for BC.
+- Tests live under ``tests/unit``, ``tests/providers``, ``tests/integration``;
+  cover ``from allchats_sdk.telegram import TelegramClient`` (and vk/max).
