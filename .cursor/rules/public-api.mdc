@@ -30,6 +30,9 @@ await client.connect()  # loads from store
 Also valid: ``from allchats_sdk import TelegramClient`` /
 ``from allchats_sdk.vk import VKClient`` / ``from allchats_sdk.max import MAXClient``.
 
+Copy patterns from ``examples/telegram/``, ``examples/vk/``, ``examples/max/`` —
+those scripts are the canonical user-facing docs.
+
 Do **not** require app/example code to implement ``EventSink`` or manually
 read ``credentials_by_account`` for normal session persistence.
 

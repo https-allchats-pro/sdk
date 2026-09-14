@@ -130,36 +130,47 @@ message_id, chat_id = await client.messages.send("hello", chat_id="123")
 
 ## Examples
 
-Runnable scripts in ``examples/``:
-
-| Script | What it shows |
-|--------|----------------|
-| ``examples/connect_telegram.py`` | Telegram QR login, 2FA password, reconnect from saved ``session_data`` |
-| ``examples/connect_vk.py`` | VK QR / user token / VK ID OAuth (PKCE), reconnect from saved token |
-| ``examples/event_bus_host.py`` | Public ``Message`` DTO → in-memory event bus → feature handler |
+Examples are the main guide to the public API. See [`examples/README.md`](examples/README.md).
 
 ```bash
 cd allchats-sdk
 pip install -e ".[telegram,vk]"
 
-# Telegram QR
+# Telegram
 export TELEGRAM_APP_ID=… TELEGRAM_APP_HASH=…
-python examples/connect_telegram.py
+python examples/telegram/connect_qr.py
+python examples/telegram/reconnect.py
+export TELEGRAM_CHAT_ID=… && python examples/telegram/send_message.py "hi"
+python examples/telegram/receive_messages.py
 
-# VK QR or token
-python examples/connect_vk.py --mode qr
-export VK_ACCESS_TOKEN=… && python examples/connect_vk.py --mode token
+# VK
+python examples/vk/connect_qr.py
+export VK_ACCESS_TOKEN=… && python examples/vk/connect_token.py
+export VK_CHAT_ID=… && python examples/vk/send_message.py "hi"
 ```
 
-For MAX (host-managed sessions via SessionManager):
+Typical Telegram shape (what the examples teach):
 
 ```python
-from allchats_sdk import MAXClient
+from allchats_sdk.telegram import TelegramClient
+from allchats_sdk import FileCredentialStore
 
-client = MAXClient(account_id=account_id, session_host=session_manager)
+store = FileCredentialStore("./telegram-session.json")
+client = TelegramClient(
+    account_id="acc-1",
+    app_id=12345,
+    app_hash="…",
+    credential_store=store,
+)
+await client.auth.start_qr()
+await client.auth.wait_until_authorized(
+    password_provider=lambda: input("2FA password: "),
+)
 await client.connect()
-await client.messages.send("hello", chat_id="12345")
+await client.messages.send("hello", chat_id="123")
 ```
+
+MAX needs a host ``SessionManager`` as ``session_host`` — see ``examples/max/``.
 
 ## Providers
 
