@@ -19,7 +19,7 @@ from allchats_sdk.providers.max.media import (
 from allchats_sdk.providers.max.qr_auth_flow import WebQrAuthFlow
 from allchats_sdk.providers.max.sms_auth_flow import WebSmsAuthFlow
 from allchats_sdk.providers.max.timeutil import message_sent_at
-from allchats_sdk.providers.max.providers import (
+from allchats_sdk.providers.max.auth import (
     WebPasswordProvider,
     WebQrHandler,
     WebSmsCodeProvider,

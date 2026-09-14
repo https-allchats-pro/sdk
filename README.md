@@ -168,6 +168,19 @@ await client.messages.send("hello", chat_id="12345")
 | WhatsApp | `[whatsapp]` | QR (neonize) | yes |
 | Discord | `[discord]` | QR, login | yes |
 
+Shared package layout for first-class providers:
+
+```text
+providers/<name>/
+  provider.py   # TelegramProvider / VKProvider / MAXProvider
+  client.py     # transport / account state (not allchats_sdk.clients.*)
+  auth.py       # auth flows
+  manager.py    # BC shim (telegram/vk)
+```
+
+Shared conceptual methods: ``connect_account``, ``start_qr``, ``disconnect``,
+``send_message``, ``client_for_account``.
+
 Register built-in providers once at startup (host / advanced):
 
 ```python

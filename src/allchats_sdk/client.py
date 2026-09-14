@@ -297,15 +297,15 @@ class MessengerClient:
 
     @property
     def messages(self) -> MessageSender:
+        if hasattr(self._provider, "send_message"):
+            return _RegistryMessageSender(self._provider, self.account_id, self.provider_id)
         if self._session_host is not None:
             return _MaxMessageSender(self._session_host, self.account_id)
-        if not hasattr(self._provider, "send_message"):
-            raise UnsupportedCapabilityError(self.provider_id, "messages")
-        return _RegistryMessageSender(self._provider, self.account_id, self.provider_id)
+        raise UnsupportedCapabilityError(self.provider_id, "messages")
 
     @property
     def chats(self) -> ChatReader:
-        if self._session_host is not None:
+        if self._session_host is not None and not hasattr(self._provider, "client_for_account"):
             raise UnsupportedCapabilityError(self.provider_id, "chats")
         if not (
             hasattr(self._provider, "client_for_account")
@@ -317,33 +317,33 @@ class MessengerClient:
 
     @property
     def auth(self) -> MessengerAuthenticator | None:
-        if self._session_host is not None:
-            return _MaxAuthenticator(self._session_host, self.account_id)
-        if not (
+        if (
             hasattr(self._provider, "connect_account")
             or hasattr(self._provider, "start_qr")
             or hasattr(self._provider, "disconnect")
             or hasattr(self._provider, "stop_session")
         ):
-            return None
-        return _RegistryAuthenticator(
-            self._provider,
-            self.account_id,
-            self.provider_id,
-            self._credential_storage,
-        )
+            return _RegistryAuthenticator(
+                self._provider,
+                self.account_id,
+                self.provider_id,
+                self._credential_storage,
+            )
+        if self._session_host is not None:
+            return _MaxAuthenticator(self._session_host, self.account_id)
+        return None
 
     async def connect(self, credentials: dict[str, Any] | None = None) -> Any:
+        connect = getattr(self._provider, "connect_account", None)
+        if connect is not None:
+            creds = credentials
+            if creds is None and self._credential_storage is not None:
+                stored = await self._credential_storage.get(self.account_id)
+                creds = dict(stored or {})
+            return await connect(self.account_id, creds or {})
         if self._session_host is not None:
             return await self._session_host.connect_account(self.account_id)
-        creds = credentials
-        if creds is None and self._credential_storage is not None:
-            stored = await self._credential_storage.get(self.account_id)
-            creds = dict(stored or {})
-        connect = getattr(self._provider, "connect_account", None)
-        if connect is None:
-            raise UnsupportedCapabilityError(self.provider_id, "connect")
-        return await connect(self.account_id, creds or {})
+        raise UnsupportedCapabilityError(self.provider_id, "connect")
 
     async def disconnect(self) -> None:
         auth = self.auth

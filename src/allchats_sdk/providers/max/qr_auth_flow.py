@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from pymax.auth.models import AuthResult
 from pymax.auth.qr import QrAuthFlow
 
-from allchats_sdk.providers.max.providers import WebQrHandler
+from allchats_sdk.providers.max.auth import WebQrHandler
 
 if TYPE_CHECKING:
     from allchats_sdk.protocols import SessionManager, SessionRuntime

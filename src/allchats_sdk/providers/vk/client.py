@@ -1,3 +1,8 @@
+"""VK HTTP / OAuth / messaging API helpers.
+
+Not the public ``allchats_sdk.clients.VKClient`` facade.
+"""
+
 from __future__ import annotations
 
 import asyncio
