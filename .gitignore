@@ -10,9 +10,12 @@ __pycache__/
 *.py[cod]
 *.egg
 
-# Local logs
+# Local logs / sessions
 src/logs/
 *.trace.log
+*-session.json
+.env
+.env.*
 
 # Test / tooling
 .pytest_cache/

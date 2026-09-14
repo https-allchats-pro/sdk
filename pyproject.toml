@@ -8,15 +8,51 @@ version = "0.1.0"
 description = "Messenger integrations SDK (Telegram, VK, MAX, Avito, Discord, WhatsApp)"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
-authors = [{ name = "messager.shop" }]
+license = { file = "LICENSE" }
+authors = [
+  { name = "messager.shop", email = "sojiguy@mail.ru" },
+]
+keywords = [
+  "messenger",
+  "telegram",
+  "vk",
+  "max",
+  "whatsapp",
+  "discord",
+  "avito",
+  "sdk",
+  "telethon",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Communications :: Chat",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
+]
 dependencies = [
   "pydantic>=2.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/https-allchats-pro/sdk"
+Repository = "https://github.com/https-allchats-pro/sdk"
+Issues = "https://github.com/https-allchats-pro/sdk/issues"
+Documentation = "https://github.com/https-allchats-pro/sdk#readme"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
+  "build>=1.2",
+  "twine>=5.0",
 ]
 telegram = [
   "telethon>=1.36.0",

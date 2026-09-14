@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from allchats_sdk.client import MessengerClient
 from allchats_sdk.clients._wiring import load_credentials, resolve_event_sink
 from allchats_sdk.credential_store import CredentialStore
 from allchats_sdk.protocols import EventSink, IncomingMessageHandler
-from allchats_sdk.providers.vk.provider import VKProvider
+
+if TYPE_CHECKING:
+    from allchats_sdk.providers.vk.provider import VKProvider
 
 
 class VKClient:
@@ -22,6 +24,8 @@ class VKClient:
         await client.auth.start_qr()
 
     Internally: ``VKClient`` → ``VKProvider`` → ``MessengerClient``.
+
+    Requires the ``[vk]`` extra to construct (imports ``requests`` / ``vk-api``).
     """
 
     provider_id = "vk"
@@ -39,6 +43,8 @@ class VKClient:
         incoming_handler: IncomingMessageHandler | None = None,
         credential_storage: CredentialStore | None = None,
     ) -> None:
+        from allchats_sdk.providers.vk.provider import VKProvider
+
         account_key = str(account_id or "").strip()
         if not account_key:
             raise ValueError("account_id is required")
@@ -94,7 +100,7 @@ class VKClient:
     def auth(self) -> Any:
         return self._client.auth
 
-    async def connect(self, credentials: dict[str, Any] | None = None) -> ConnectionState:
+    async def connect(self, credentials: dict[str, Any] | None = None):
         from allchats_sdk.models import ConnectionState
 
         creds = credentials
