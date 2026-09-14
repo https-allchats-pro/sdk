@@ -12,7 +12,7 @@ from allchats_sdk.providers.vk.qr_auth import (
     init_qr_session_async,
     resolve_approved_token_async,
 )
-from allchats_sdk.observability import record_auth
+from allchats_sdk.internal.observability import record_auth
 
 logger = logging.getLogger(__name__)
 

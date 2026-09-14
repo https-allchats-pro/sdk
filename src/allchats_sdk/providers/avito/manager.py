@@ -36,7 +36,7 @@ from allchats_sdk.credentials import (
     merge_credentials,
 )
 from allchats_sdk.errors import ValidationError
-from allchats_sdk.observability import record_auth
+from allchats_sdk.internal.observability import record_auth
 
 logger = logging.getLogger(__name__)
 

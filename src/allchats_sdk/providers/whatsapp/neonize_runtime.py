@@ -268,7 +268,7 @@ async def run_whatsapp_neonize_runtime(
         logger.warning("whatsapp neonize runtime failed account=%s: %s", account_id[:8], exc)
         existing = manager.client_for_account(account_id)
         if existing is None or existing.state_instance != "authorized":
-            from allchats_sdk.observability import record_auth
+            from allchats_sdk.internal.observability import record_auth
 
             record_auth("whatsapp", "failed")
         manager.set_client_state(

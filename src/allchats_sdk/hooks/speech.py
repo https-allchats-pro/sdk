@@ -1,24 +1,20 @@
-"""Optional speech recognition hook (injected by host application)."""
+"""Deprecated compatibility shim.
+
+Use ``allchats_sdk.internal.hooks.speech`` instead.
+"""
 
 from __future__ import annotations
 
-from typing import Any, Callable, Awaitable
+from typing import Any
 
-TranscribeFn = Callable[..., Awaitable[Any]]
-
-_transcribe: TranscribeFn | None = None
-
-
-class SpeechRecognitionError(Exception):
-    pass
+__all__ = [
+    "SpeechRecognitionError",
+    "set_transcriber",
+    "transcribe_voice_bytes",
+]
 
 
-def set_transcriber(fn: TranscribeFn | None) -> None:
-    global _transcribe
-    _transcribe = fn
+def __getattr__(name: str) -> Any:
+    from allchats_sdk.internal.hooks import speech as _speech
 
-
-async def transcribe_voice_bytes(*args: Any, **kwargs: Any) -> Any:
-    if _transcribe is None:
-        raise SpeechRecognitionError("speech recognition is not configured")
-    return await _transcribe(*args, **kwargs)
+    return getattr(_speech, name)

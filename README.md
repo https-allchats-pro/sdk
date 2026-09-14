@@ -92,8 +92,10 @@ from allchats_sdk import (
 
 `MaxMessengerClient` remains a thin alias around ``MAXProvider`` / ``MAXClient``.
 
-The **registry** is an internal SDK mechanism. Application code should not import
-``allchats_sdk.registry``.
+Non-public modules live under ``allchats_sdk.internal`` (registry, hooks,
+observability, runtime). Application code should not import them unless you are
+extending the SDK or wiring a host. Legacy top-level paths
+(``allchats_sdk.registry``, ``hooks``, ``observability``, ``host``) remain as shims.
 
 ## Domain models
 
@@ -166,10 +168,11 @@ await client.messages.send("hello", chat_id="12345")
 | WhatsApp | `[whatsapp]` | QR (neonize) | yes |
 | Discord | `[discord]` | QR, login | yes |
 
-Register built-in providers once at startup:
+Register built-in providers once at startup (host / advanced):
 
 ```python
-from allchats_sdk.providers.register import register_builtin_providers
+from allchats_sdk.internal.registry import default_registry
+from allchats_sdk.internal.runtime.register import register_builtin_providers
 
 register_builtin_providers()  # mutates default_registry
 ```
@@ -236,7 +239,8 @@ Host/backend implements SDK protocols from ``allchats_sdk.protocols``:
 
 ``NullEventSink`` is a no-op implementation for tests and standalone scripts.
 
-Legacy shims (same symbols): ``allchats_sdk.host_ports``, ``allchats_sdk.host``.
+Legacy shims (same symbols): ``allchats_sdk.host_ports``, ``allchats_sdk.host``
+(prefer ``allchats_sdk.protocols`` / ``allchats_sdk.internal.runtime``).
 
 ## Events
 

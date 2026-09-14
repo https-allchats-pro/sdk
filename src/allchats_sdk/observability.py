@@ -1,25 +1,26 @@
-"""Optional metrics hooks. Backend can replace recorders at startup."""
+"""Deprecated compatibility shim.
+
+Use ``allchats_sdk.internal.observability`` instead.
+"""
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
+
+__all__ = [
+    "configure_metrics",
+    "record_auth",
+    "record_message",
+]
 
 
-def _noop(*_args: Any, **_kwargs: Any) -> None:
-    return None
+def configure_metrics(**kwargs: Any) -> None:
+    from allchats_sdk.internal import observability as _obs
+
+    _obs.configure_metrics(**kwargs)
 
 
-record_auth: Callable[..., Any] = _noop
-record_message: Callable[..., Any] = _noop
+def __getattr__(name: str) -> Any:
+    from allchats_sdk.internal import observability as _obs
 
-
-def configure_metrics(
-    *,
-    auth: Callable[..., Any] | None = None,
-    message: Callable[..., Any] | None = None,
-) -> None:
-    global record_auth, record_message
-    if auth is not None:
-        record_auth = auth
-    if message is not None:
-        record_message = message
+    return getattr(_obs, name)

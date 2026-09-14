@@ -14,7 +14,7 @@ from vk_api.utils import clear_string, code_from_number, search_re
 
 from allchats_sdk.providers.vk.client import API_VERSION
 from allchats_sdk.providers.vk.manager import VkClientManager
-from allchats_sdk.observability import record_auth
+from allchats_sdk.internal.observability import record_auth
 
 logger = logging.getLogger(__name__)
 

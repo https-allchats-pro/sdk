@@ -7,7 +7,7 @@ from typing import Any
 
 from allchats_sdk.client import MaxMessengerClient, MessengerClient
 from allchats_sdk.errors import MessengerClientUnavailableError, UnsupportedCapabilityError
-from allchats_sdk.registry import ProviderRegistry
+from allchats_sdk.internal.registry import ProviderRegistry
 
 
 class _MockCredentials:

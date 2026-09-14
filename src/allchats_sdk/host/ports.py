@@ -1,13 +1,11 @@
-"""Deprecated compatibility shim for host ports.
+"""Deprecated compatibility shim.
 
-Use ``allchats_sdk.protocols`` instead::
-
-    from allchats_sdk.protocols import EventSink, MaxSessionHost, SessionManager
+Use ``allchats_sdk.protocols`` or ``allchats_sdk.internal.runtime.ports``.
 """
 
 from __future__ import annotations
 
-from allchats_sdk.protocols import (
+from allchats_sdk.internal.runtime.ports import (
     CredentialStorage,
     DeliveryTracker,
     EventSink,

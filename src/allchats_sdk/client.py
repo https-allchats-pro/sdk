@@ -9,7 +9,7 @@ from allchats_sdk.capabilities import ChatReader, MessageSender, MessengerAuthen
 from allchats_sdk.errors import MessengerClientUnavailableError, UnsupportedCapabilityError
 from allchats_sdk.models import ConnectionState
 from allchats_sdk.protocols import CredentialStorage, MessengerProvider
-from allchats_sdk.registry import ProviderRegistry, default_registry
+from allchats_sdk.internal.registry import ProviderRegistry, default_registry
 
 _BUILTINS_REGISTERED = False
 
@@ -18,7 +18,7 @@ def _ensure_builtin_providers() -> None:
     global _BUILTINS_REGISTERED
     if _BUILTINS_REGISTERED:
         return
-    from allchats_sdk.providers.register import register_builtin_providers
+    from allchats_sdk.internal.runtime.register import register_builtin_providers
 
     register_builtin_providers()
     _BUILTINS_REGISTERED = True

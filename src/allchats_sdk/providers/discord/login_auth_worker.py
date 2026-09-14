@@ -10,7 +10,7 @@ from allchats_sdk.providers.discord.api import (
     login,
     submit_mfa_totp,
 )
-from allchats_sdk.observability import record_auth
+from allchats_sdk.internal.observability import record_auth
 
 if TYPE_CHECKING:
     from allchats_sdk.providers.discord.manager import DiscordClientManager

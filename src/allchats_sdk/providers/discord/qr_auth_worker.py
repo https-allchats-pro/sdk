@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from allchats_sdk.providers.discord.api import DiscordApiError, exchange_remote_auth_ticket
 from allchats_sdk.providers.discord.remote_auth import DiscordRemoteAuthError, run_remote_auth
-from allchats_sdk.observability import record_auth
+from allchats_sdk.internal.observability import record_auth
 
 if TYPE_CHECKING:
     from allchats_sdk.providers.discord.manager import DiscordAccountClient, DiscordClientManager

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from allchats_sdk.providers.telegram.proxy import resolve_telegram_proxy
 from allchats_sdk.errors import ValidationError
-from allchats_sdk.observability import record_auth
+from allchats_sdk.internal.observability import record_auth
 
 if TYPE_CHECKING:
     from allchats_sdk.providers.telegram.manager import TelegramAccountClient, TelegramClientManager

@@ -48,7 +48,7 @@ from allchats_sdk.events import (
 from allchats_sdk.protocols import DeliveryTracker, EventSink, IncomingMessageHandler
 from allchats_sdk.credentials import merge_credentials, vk_authorized
 from allchats_sdk.errors import ValidationError
-from allchats_sdk.observability import record_auth
+from allchats_sdk.internal.observability import record_auth
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from allchats_sdk.registry import ProviderRegistry
+from allchats_sdk.internal.registry import ProviderRegistry
 
 
 class ProviderRegistryTests(unittest.TestCase):

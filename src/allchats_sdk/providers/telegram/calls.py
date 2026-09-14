@@ -1453,7 +1453,7 @@ class TelegramCallCoordinator:
         *,
         final: bool,
     ) -> None:
-        from allchats_sdk.hooks.speech import SpeechRecognitionError, transcribe_voice_bytes
+        from allchats_sdk.internal.hooks.speech import SpeechRecognitionError, transcribe_voice_bytes
 
         settings = session.live_whisper_settings
         if settings is None or not chunk:

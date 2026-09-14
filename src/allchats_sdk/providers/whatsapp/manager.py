@@ -25,7 +25,7 @@ from allchats_sdk.protocols import DeliveryTracker, EventSink, IncomingMessageHa
 from allchats_sdk.providers.credentials_cache import CredentialsCache
 from allchats_sdk.credentials import merge_credentials, whatsapp_authorized
 from allchats_sdk.errors import MessengerClientUnavailableError, ValidationError
-from allchats_sdk.observability import record_auth
+from allchats_sdk.internal.observability import record_auth
 
 logger = logging.getLogger(__name__)
 
