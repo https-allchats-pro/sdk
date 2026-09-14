@@ -1,8 +1,8 @@
 """Minimal host example: SDK EventSink → in-memory Event Bus → feature handler.
 
-Run from backend root (with messenger-sdk installed):
+Run from the allchats-sdk directory:
 
-    python packages/messenger-sdk/examples/event_bus_host.py
+    python examples/event_bus_host.py
 """
 
 from __future__ import annotations

@@ -59,6 +59,29 @@ await client.connect(credentials)
 message_id, chat_id = await client.messages.send("hello", chat_id="123")
 ```
 
+## Examples
+
+Runnable scripts in ``examples/``:
+
+| Script | What it shows |
+|--------|----------------|
+| ``examples/connect_telegram.py`` | Telegram QR login, 2FA password, reconnect from saved ``session_data`` |
+| ``examples/connect_vk.py`` | VK QR / user token / VK ID OAuth (PKCE), reconnect from saved token |
+| ``examples/event_bus_host.py`` | Host ``EventSink`` → in-memory event bus → feature handler |
+
+```bash
+cd allchats-sdk
+pip install -e ".[telegram,vk]"
+
+# Telegram QR
+export TELEGRAM_APP_ID=… TELEGRAM_APP_HASH=…
+python examples/connect_telegram.py
+
+# VK QR or token
+python examples/connect_vk.py --mode qr
+export VK_ACCESS_TOKEN=… && python examples/connect_vk.py --mode token
+```
+
 For MAX (host-managed sessions via SessionManager):
 
 ```python
