@@ -1,22 +1,15 @@
 """Connect a Telegram account via QR (or reconnect with saved session).
 
-Uses only the public package-root API.
+Preferred public API — account client only::
 
-Requires ``[telegram]`` extra and Telegram API credentials from
-https://my.telegram.org/apps
+    client = TelegramClient(account_id=..., app_id=..., app_hash=...)
 
-Run from the allchats-sdk directory:
+Requires ``[telegram]`` extra and credentials from https://my.telegram.org/apps
 
     pip install -e ".[telegram]"
     export TELEGRAM_APP_ID=12345
     export TELEGRAM_APP_HASH=your_app_hash
     python examples/connect_telegram.py
-
-Optional:
-
-    export TELEGRAM_ACCOUNT_ID=acc-1
-    export TELEGRAM_SESSION_FILE=./telegram-session.json
-    python examples/connect_telegram.py --reconnect
 """
 
 from __future__ import annotations
@@ -28,10 +21,9 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
-from allchats_sdk import Account, AllChatsError, ConnectionState, MessengerClient, TelegramProvider
+from allchats_sdk import AllChatsError, ConnectionState, TelegramClient
 
 
 @dataclass
@@ -67,14 +59,6 @@ class SavingEventSink:
         return None
 
 
-def _load_settings() -> SimpleNamespace:
-    app_id = int(os.environ.get("TELEGRAM_APP_ID") or "0")
-    app_hash = (os.environ.get("TELEGRAM_APP_HASH") or "").strip()
-    if not app_id or not app_hash:
-        raise SystemExit("Set TELEGRAM_APP_ID and TELEGRAM_APP_HASH")
-    return SimpleNamespace(telegram=SimpleNamespace(app_id=app_id, app_hash=app_hash, proxy=None))
-
-
 def _session_path() -> Path:
     return Path(os.environ.get("TELEGRAM_SESSION_FILE") or "./telegram-session.json")
 
@@ -104,19 +88,29 @@ def _is_authorized(credentials: dict[str, Any]) -> bool:
     )
 
 
-def _connection_state(account: Account, raw: Any) -> ConnectionState:
-    state = str(getattr(raw, "state_instance", "") or "unknown")
-    user_id = str(getattr(raw, "user_id", "") or "")
-    error = str(getattr(raw, "error", "") or "")
+def _connection_state(account_id: str, raw: Any) -> ConnectionState:
     return ConnectionState(
-        connection_id=account.id,
-        state=state,
-        user_id=user_id,
-        error=error,
+        connection_id=account_id,
+        state=str(getattr(raw, "state_instance", "") or "unknown"),
+        user_id=str(getattr(raw, "user_id", "") or ""),
+        error=str(getattr(raw, "error", "") or ""),
     )
 
 
-async def _wait_authorized(client: MessengerClient, account: Account, *, timeout_sec: float = 300.0) -> ConnectionState:
+def _build_client(account_id: str, sink: SavingEventSink) -> TelegramClient:
+    app_id = int(os.environ.get("TELEGRAM_APP_ID") or "0")
+    app_hash = (os.environ.get("TELEGRAM_APP_HASH") or "").strip()
+    if not app_id or not app_hash:
+        raise SystemExit("Set TELEGRAM_APP_ID and TELEGRAM_APP_HASH")
+    return TelegramClient(
+        account_id,
+        app_id=app_id,
+        app_hash=app_hash,
+        event_sink=sink,
+    )
+
+
+async def _wait_authorized(client: TelegramClient, *, timeout_sec: float = 300.0) -> ConnectionState:
     assert client.auth is not None
     deadline = asyncio.get_running_loop().time() + timeout_sec
     while asyncio.get_running_loop().time() < deadline:
@@ -124,7 +118,7 @@ async def _wait_authorized(client: MessengerClient, account: Account, *, timeout
         if raw is None:
             await asyncio.sleep(0.5)
             continue
-        status = _connection_state(account, raw)
+        status = _connection_state(client.account_id, raw)
         if status.state == "passwordRequired":
             password = await asyncio.to_thread(input, "Telegram 2FA password: ")
             await client.auth.submit_password(password.strip())
@@ -137,26 +131,21 @@ async def _wait_authorized(client: MessengerClient, account: Account, *, timeout
     raise TimeoutError("telegram authorization timed out")
 
 
-def _build_client(account: Account, sink: SavingEventSink) -> MessengerClient:
-    telegram = TelegramProvider(settings=_load_settings(), event_sink=sink)
-    return MessengerClient(provider=telegram, account_id=account.id)
-
-
-async def connect_via_qr(account: Account, session_file: Path) -> None:
+async def connect_via_qr(account_id: str, session_file: Path) -> None:
     sink = SavingEventSink()
-    client = _build_client(account, sink)
+    client = _build_client(account_id, sink)
     assert client.auth is not None
 
-    credentials = _load_credentials(session_file, account.id)
+    credentials = _load_credentials(session_file, account_id)
     qr = await client.auth.start_qr(credentials)
     qr_link = getattr(qr, "qr_link", None) or getattr(qr, "auth_url", "") or ""
     print("Scan this QR link in Telegram → Settings → Devices → Link Desktop Device:")
     print(qr_link)
 
-    authorized = await _wait_authorized(client, account)
+    authorized = await _wait_authorized(client)
     print(f"[telegram] authorized user_id={authorized.user_id} state={authorized.state}")
 
-    saved = sink.credentials_by_account.get(account.id) or credentials
+    saved = sink.credentials_by_account.get(account_id) or credentials
     if saved.get("session_data"):
         _save_credentials(session_file, saved)
     else:
@@ -166,16 +155,16 @@ async def connect_via_qr(account: Account, session_file: Path) -> None:
     await client.disconnect()
 
 
-async def reconnect(account: Account, session_file: Path) -> None:
+async def reconnect(account_id: str, session_file: Path) -> None:
     sink = SavingEventSink()
-    client = _build_client(account, sink)
+    client = _build_client(account_id, sink)
 
-    credentials = _load_credentials(session_file, account.id)
+    credentials = _load_credentials(session_file, account_id)
     if not _is_authorized(credentials):
         raise SystemExit(f"No authorized session in {session_file}; run without --reconnect first")
 
     raw = await client.connect(credentials)
-    status = _connection_state(account, raw)
+    status = _connection_state(account_id, raw)
     print(f"[telegram] reconnected state={status.state} user_id={status.user_id}")
     await asyncio.sleep(1)
     await client.disconnect()
@@ -186,16 +175,13 @@ async def main() -> None:
     parser.add_argument("--reconnect", action="store_true", help="reuse TELEGRAM_SESSION_FILE")
     args = parser.parse_args()
 
-    account = Account(
-        id=(os.environ.get("TELEGRAM_ACCOUNT_ID") or "acc-telegram-1").strip(),
-        provider="telegram",
-    )
+    account_id = (os.environ.get("TELEGRAM_ACCOUNT_ID") or "acc-telegram-1").strip()
     session_file = _session_path()
 
     if args.reconnect:
-        await reconnect(account, session_file)
+        await reconnect(account_id, session_file)
     else:
-        await connect_via_qr(account, session_file)
+        await connect_via_qr(account_id, session_file)
 
 
 if __name__ == "__main__":

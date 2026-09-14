@@ -42,7 +42,27 @@ pip install -e "./allchats-sdk[all,dev]"
 
 ## Public API
 
-Stable imports come from the package root:
+Preferred **account clients** (no registry / manager knowledge required):
+
+```python
+from allchats_sdk import TelegramClient, VKClient, MAXClient
+
+client = TelegramClient(
+    account_id="acc-1",
+    app_id=12345,
+    app_hash="...",
+)
+await client.connect(credentials)
+await client.messages.send("hello", chat_id="123")
+```
+
+Stack inside the SDK:
+
+```text
+TelegramClient → TelegramProvider → MessengerClient → Telegram
+```
+
+Also exported (advanced / host wiring):
 
 ```python
 from allchats_sdk import (
@@ -59,31 +79,22 @@ from allchats_sdk import (
 )
 ```
 
-`MaxMessengerClient` remains as a thin alias around ``MAXProvider``.
+`MaxMessengerClient` remains a thin alias around ``MAXProvider`` / ``MAXClient``.
 
-**Preferred usage** — typed providers, then a generic client:
-
-```python
-telegram = TelegramProvider(settings=settings, event_sink=sink)
-client = MessengerClient(provider=telegram, account_id=account_id)
-await client.connect(credentials)
-```
-
-The **registry** is an internal SDK mechanism for hosts that still resolve providers by name. Application code should not import ``allchats_sdk.registry``.
-
-Treat deeper modules as **internal**:
-
-- `allchats_sdk.registry` / `providers.register` — host wiring
-- `allchats_sdk.host` / `protocols` — host ports (`EventSink`, storage, …)
-- `allchats_sdk.hooks` — optional host hooks
+The **registry** is an internal SDK mechanism. Application code should not import
+``allchats_sdk.registry``.
 
 ## Quick start
 
 ```python
-from allchats_sdk import MessengerClient, TelegramProvider
+from allchats_sdk import TelegramClient
 
-telegram = TelegramProvider(settings=settings, event_sink=event_sink)
-client = MessengerClient(provider=telegram, account_id=account_id)
+client = TelegramClient(
+    account_id=account_id,
+    app_id=settings.telegram.app_id,
+    app_hash=settings.telegram.app_hash,
+    event_sink=event_sink,  # optional; defaults to NullEventSink
+)
 await client.connect(credentials)
 message_id, chat_id = await client.messages.send("hello", chat_id="123")
 ```
@@ -114,10 +125,9 @@ export VK_ACCESS_TOKEN=… && python examples/connect_vk.py --mode token
 For MAX (host-managed sessions via SessionManager):
 
 ```python
-from allchats_sdk import MAXProvider, MessengerClient
+from allchats_sdk import MAXClient
 
-max_provider = MAXProvider(session_host=session_manager)
-client = MessengerClient(provider=max_provider, account_id=account_id)
+client = MAXClient(account_id=account_id, session_host=session_manager)
 await client.connect()
 await client.messages.send("hello", chat_id="12345")
 ```
@@ -221,15 +231,13 @@ Media metadata keys commonly passed via ``IncomingMessageEvent.metadata``:
 
 ## MessengerClient facade
 
-Capability-based per-account API over typed providers:
+Capability-based per-account API:
 
-- ``TelegramProvider`` / ``VKProvider`` / ``MAXProvider`` — construct explicitly
-- ``MessengerClient(provider=..., account_id=...)`` — per-account facade
-- ``MaxMessengerClient`` — thin alias for ``MAXProvider``
-- ``client.messages`` — send text messages
-- ``client.chats`` — client state / sync (when supported)
-- ``client.auth`` — connect, QR, disconnect (when supported)
-- ``client.connect()`` / ``client.disconnect()`` — session lifecycle shortcuts
+- ``TelegramClient`` / ``VKClient`` / ``MAXClient`` — preferred account entrypoints
+- ``TelegramProvider`` / ``VKProvider`` / ``MAXProvider`` — typed providers (advanced)
+- ``MessengerClient(provider=..., account_id=...)`` — generic facade over a provider
+- ``client.messages`` / ``client.chats`` / ``client.auth`` — capabilities
+- ``client.connect()`` / ``client.disconnect()`` — session lifecycle
 
 Unsupported capabilities raise ``UnsupportedCapabilityError``.
 

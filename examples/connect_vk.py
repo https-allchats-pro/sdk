@@ -1,35 +1,13 @@
 """Connect a VK account (QR, OAuth, or user access_token).
 
-Uses only the public package-root API.
+Preferred public API — account client only::
+
+    client = VKClient(account_id=..., app_id=...)
 
 Requires ``[vk]`` extra. Create an app at https://dev.vk.com/
 
-Run from the allchats-sdk directory:
-
     pip install -e ".[vk]"
-
-Modes:
-
-1) QR:
-
     python examples/connect_vk.py --mode qr
-
-2) User token:
-
-    export VK_ACCESS_TOKEN=vk1.a....
-    python examples/connect_vk.py --mode token
-
-3) VK ID OAuth (PKCE, interactive):
-
-    export VK_APP_ID=12345678
-    export VK_APP_SECRET=your_secret
-    export VK_REDIRECT_URI=http://127.0.0.1:8090/vk/oauth/callback
-    python examples/connect_vk.py --mode oauth
-
-Optional:
-
-    export VK_ACCOUNT_ID=acc-vk-1
-    export VK_SESSION_FILE=./vk-session.json
 """
 
 from __future__ import annotations
@@ -41,10 +19,9 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
-from allchats_sdk import Account, AllChatsError, ConnectionState, MessengerClient, VKProvider
+from allchats_sdk import AllChatsError, ConnectionState, VKClient
 
 
 @dataclass
@@ -82,25 +59,6 @@ def _session_path() -> Path:
     return Path(os.environ.get("VK_SESSION_FILE") or "./vk-session.json")
 
 
-def _load_settings(*, require_oauth: bool = False) -> SimpleNamespace:
-    app_id = (os.environ.get("VK_APP_ID") or "").strip()
-    app_secret = (os.environ.get("VK_APP_SECRET") or "").strip()
-    redirect_uri = (os.environ.get("VK_REDIRECT_URI") or "").strip()
-    scopes = (os.environ.get("VK_SCOPES") or "").strip()
-    if require_oauth and not (app_id and app_secret and redirect_uri):
-        raise SystemExit("Set VK_APP_ID, VK_APP_SECRET and VK_REDIRECT_URI for OAuth")
-    return SimpleNamespace(
-        vk=SimpleNamespace(
-            app_id=app_id,
-            app_secret=app_secret,
-            redirect_uri=redirect_uri,
-            scopes=scopes,
-            is_configured=lambda: bool(app_id and app_secret and redirect_uri),
-            login_auth_configured=lambda: bool(app_id),
-        )
-    )
-
-
 def _save_credentials(path: Path, credentials: dict[str, Any]) -> None:
     path.write_text(json.dumps(credentials, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[vk] saved session → {path}")
@@ -119,28 +77,45 @@ def _is_authorized(credentials: dict[str, Any]) -> bool:
     )
 
 
-def _connection_state(account: Account, raw: Any) -> ConnectionState:
+def _connection_state(account_id: str, raw: Any) -> ConnectionState:
     return ConnectionState(
-        connection_id=account.id,
+        connection_id=account_id,
         state=str(getattr(raw, "state_instance", "") or "unknown"),
         user_id=str(getattr(raw, "user_id", "") or ""),
         error=str(getattr(raw, "error", "") or ""),
     )
 
 
-def _build_client(account: Account, sink: SavingEventSink, *, require_oauth: bool = False) -> MessengerClient:
-    vk = VKProvider(settings=_load_settings(require_oauth=require_oauth), event_sink=sink)
-    return MessengerClient(provider=vk, account_id=account.id)
+def _build_client(
+    account_id: str,
+    sink: SavingEventSink,
+    *,
+    require_oauth: bool = False,
+) -> VKClient:
+    app_id = (os.environ.get("VK_APP_ID") or "").strip()
+    app_secret = (os.environ.get("VK_APP_SECRET") or "").strip()
+    redirect_uri = (os.environ.get("VK_REDIRECT_URI") or "").strip()
+    scopes = (os.environ.get("VK_SCOPES") or "").strip()
+    if require_oauth and not (app_id and app_secret and redirect_uri):
+        raise SystemExit("Set VK_APP_ID, VK_APP_SECRET and VK_REDIRECT_URI for OAuth")
+    return VKClient(
+        account_id,
+        app_id=app_id,
+        app_secret=app_secret,
+        redirect_uri=redirect_uri,
+        scopes=scopes,
+        event_sink=sink,
+    )
 
 
-async def _wait_authorized(client: MessengerClient, account: Account, *, timeout_sec: float = 300.0) -> ConnectionState:
+async def _wait_authorized(client: VKClient, *, timeout_sec: float = 300.0) -> ConnectionState:
     deadline = asyncio.get_running_loop().time() + timeout_sec
     while asyncio.get_running_loop().time() < deadline:
         raw = await client.chats.client_state()
         if raw is None:
             await asyncio.sleep(0.5)
             continue
-        status = _connection_state(account, raw)
+        status = _connection_state(client.account_id, raw)
         if status.state == "authorized" or bool(status.user_id):
             return status
         if status.state in {"notAuthorized", "error"} and status.error:
@@ -149,9 +124,9 @@ async def _wait_authorized(client: MessengerClient, account: Account, *, timeout
     raise TimeoutError("vk authorization timed out")
 
 
-async def connect_qr(account: Account, session_file: Path) -> None:
+async def connect_qr(account_id: str, session_file: Path) -> None:
     sink = SavingEventSink()
-    client = _build_client(account, sink)
+    client = _build_client(account_id, sink)
     assert client.auth is not None
 
     qr = await client.auth.start_qr()
@@ -159,10 +134,10 @@ async def connect_qr(account: Account, session_file: Path) -> None:
     print("Open VK on your phone → Profile → QR scanner and scan:")
     print(qr_link)
 
-    authorized = await _wait_authorized(client, account)
+    authorized = await _wait_authorized(client)
     print(f"[vk] authorized user_id={authorized.user_id} state={authorized.state}")
 
-    saved = sink.credentials_by_account.get(account.id)
+    saved = sink.credentials_by_account.get(account_id)
     if saved:
         _save_credentials(session_file, saved)
 
@@ -170,29 +145,28 @@ async def connect_qr(account: Account, session_file: Path) -> None:
     await client.disconnect()
 
 
-async def connect_token(account: Account, session_file: Path) -> None:
+async def connect_token(account_id: str, session_file: Path) -> None:
     access_token = (os.environ.get("VK_ACCESS_TOKEN") or "").strip()
     if not access_token:
         raise SystemExit("Set VK_ACCESS_TOKEN")
 
     sink = SavingEventSink()
-    client = _build_client(account, sink)
+    client = _build_client(account_id, sink)
     assert client.auth is not None
 
     credentials = await client.auth.connect_with_token(access_token)
     _save_credentials(session_file, credentials)
 
     raw = await client.connect(credentials)
-    status = _connection_state(account, raw)
+    status = _connection_state(account_id, raw)
     print(f"[vk] connected state={status.state} user_id={status.user_id}")
     await asyncio.sleep(1)
     await client.disconnect()
 
 
-async def connect_oauth(account: Account, session_file: Path) -> None:
-    """Interactive OAuth: PKCE verifier must stay on the same client instance."""
+async def connect_oauth(account_id: str, session_file: Path) -> None:
     sink = SavingEventSink()
-    client = _build_client(account, sink, require_oauth=True)
+    client = _build_client(account_id, sink, require_oauth=True)
     assert client.auth is not None
 
     url = client.auth.build_oauth_url()
@@ -215,21 +189,21 @@ async def connect_oauth(account: Account, session_file: Path) -> None:
     _save_credentials(session_file, credentials)
 
     raw = await client.connect(credentials)
-    status = _connection_state(account, raw)
+    status = _connection_state(account_id, raw)
     print(f"[vk] oauth connected state={status.state} user_id={status.user_id}")
     await asyncio.sleep(1)
     await client.disconnect()
 
 
-async def reconnect(account: Account, session_file: Path) -> None:
+async def reconnect(account_id: str, session_file: Path) -> None:
     credentials = _load_credentials(session_file)
     if not _is_authorized(credentials):
         raise SystemExit(f"No authorized session in {session_file}")
 
     sink = SavingEventSink()
-    client = _build_client(account, sink)
+    client = _build_client(account_id, sink)
     raw = await client.connect(credentials)
-    status = _connection_state(account, raw)
+    status = _connection_state(account_id, raw)
     print(f"[vk] reconnected state={status.state} user_id={status.user_id}")
     await asyncio.sleep(1)
     await client.disconnect()
@@ -244,20 +218,17 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
-    account = Account(
-        id=(os.environ.get("VK_ACCOUNT_ID") or "acc-vk-1").strip(),
-        provider="vk",
-    )
+    account_id = (os.environ.get("VK_ACCOUNT_ID") or "acc-vk-1").strip()
     session_file = _session_path()
 
     if args.mode == "qr":
-        await connect_qr(account, session_file)
+        await connect_qr(account_id, session_file)
     elif args.mode == "token":
-        await connect_token(account, session_file)
+        await connect_token(account_id, session_file)
     elif args.mode == "oauth":
-        await connect_oauth(account, session_file)
+        await connect_oauth(account_id, session_file)
     else:
-        await reconnect(account, session_file)
+        await reconnect(account_id, session_file)
 
 
 if __name__ == "__main__":
