@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from allchats_sdk.errors import (
+    AllChatsError,
     MessengerClientUnavailableError,
     MessengerError,
     SessionNotConnectedError,
@@ -16,9 +17,10 @@ from allchats_sdk.errors import (
 
 class ErrorTests(unittest.TestCase):
     def test_exception_hierarchy(self) -> None:
-        self.assertTrue(issubclass(ValidationError, MessengerError))
-        self.assertTrue(issubclass(MessengerClientUnavailableError, MessengerError))
-        self.assertTrue(issubclass(UnsupportedCapabilityError, MessengerError))
+        self.assertIs(MessengerError, AllChatsError)
+        self.assertTrue(issubclass(ValidationError, AllChatsError))
+        self.assertTrue(issubclass(MessengerClientUnavailableError, AllChatsError))
+        self.assertTrue(issubclass(UnsupportedCapabilityError, AllChatsError))
 
     def test_session_not_connected_carries_status(self) -> None:
         exc = SessionNotConnectedError("waiting_qr")

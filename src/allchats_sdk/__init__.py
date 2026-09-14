@@ -1,45 +1,42 @@
-"""allchats-sdk — messenger integrations without application domain coupling."""
+"""allchats-sdk — messenger integrations without application domain coupling.
 
-from allchats_sdk.capabilities import ChatReader, MessageSender, MessengerAuthenticator
+Public API (stable)
+-------------------
+Import from the package root::
+
+    from allchats_sdk import (
+        MessengerClient,
+        Message,
+        Chat,
+        Account,
+        ConnectionState,
+        Capability,
+        AllChatsError,
+    )
+
+Everything else (``registry``, ``host``, ``hooks``, ``providers.*``, …) is
+**internal** unless documented otherwise. Prefer the root facade for new code.
+"""
+
 from allchats_sdk.client import MaxMessengerClient, MessengerClient
-from allchats_sdk.errors import (
-    MessengerClientUnavailableError,
-    MessengerError,
-    SessionNotConnectedError,
-    UnsupportedCapabilityError,
-    ValidationError,
+from allchats_sdk.errors import AllChatsError
+from allchats_sdk.models import (
+    Account,
+    Capability,
+    Chat,
+    ConnectionState,
+    Message,
 )
-from allchats_sdk.protocols import (
-    CredentialStorage,
-    DeliveryTracker,
-    EventSink,
-    IncomingMessageHandler,
-    MediaStorage,
-    MessengerProvider,
-    NullEventSink,
-)
-from allchats_sdk.registry import ProviderRegistry, default_registry
 
 __all__ = [
-    "ChatReader",
-    "CredentialStorage",
-    "DeliveryTracker",
-    "EventSink",
-    "IncomingMessageHandler",
+    "Account",
+    "AllChatsError",
+    "Capability",
+    "Chat",
+    "ConnectionState",
     "MaxMessengerClient",
-    "MediaStorage",
-    "MessageSender",
-    "MessengerAuthenticator",
+    "Message",
     "MessengerClient",
-    "MessengerClientUnavailableError",
-    "MessengerError",
-    "MessengerProvider",
-    "NullEventSink",
-    "ProviderRegistry",
-    "SessionNotConnectedError",
-    "UnsupportedCapabilityError",
-    "ValidationError",
-    "default_registry",
     "__version__",
 ]
 

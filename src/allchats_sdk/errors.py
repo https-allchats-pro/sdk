@@ -1,25 +1,29 @@
 """Messenger SDK errors (backend-agnostic)."""
 
 
-class MessengerError(Exception):
-    """Base SDK exception."""
+class AllChatsError(Exception):
+    """Base public exception for allchats-sdk."""
 
 
-class ValidationError(MessengerError):
+#: Backward-compatible alias for :class:`AllChatsError`.
+MessengerError = AllChatsError
+
+
+class ValidationError(AllChatsError):
     pass
 
 
-class MessengerClientUnavailableError(MessengerError):
+class MessengerClientUnavailableError(AllChatsError):
     pass
 
 
-class SessionNotConnectedError(MessengerError):
+class SessionNotConnectedError(AllChatsError):
     def __init__(self, status: str) -> None:
         super().__init__(f"Session is not connected: {status}")
         self.status = status
 
 
-class UnsupportedCapabilityError(MessengerError):
+class UnsupportedCapabilityError(AllChatsError):
     def __init__(self, provider: str, capability: str) -> None:
         super().__init__(f"provider '{provider}' does not support '{capability}'")
         self.provider = provider

@@ -40,11 +40,39 @@ For development and tests:
 pip install -e "./allchats-sdk[all,dev]"
 ```
 
+## Public API
+
+Stable imports come from the package root:
+
+```python
+from allchats_sdk import (
+    MessengerClient,
+    Message,
+    Chat,
+    Account,
+    ConnectionState,
+    Capability,
+    AllChatsError,
+)
+```
+
+`MaxMessengerClient` is also public (MAX sessions owned by the host).
+
+Treat deeper modules as **internal** for application code:
+
+- `allchats_sdk.registry` / `providers.register` — host wiring
+- `allchats_sdk.host` / `protocols` — host ports (`EventSink`, storage, …)
+- `allchats_sdk.hooks` — optional host hooks
+
+Prefer extending `MessengerClient` over teaching new deep imports.
+
 ## Quick start
 
 ```python
-from allchats_sdk import MessengerClient, NullEventSink, default_registry
+from allchats_sdk import MessengerClient
+from allchats_sdk.protocols import NullEventSink  # host port (internal)
 from allchats_sdk.providers.register import register_builtin_providers
+from allchats_sdk.registry import default_registry
 
 register_builtin_providers()
 manager = default_registry.create(
@@ -206,10 +234,13 @@ Unsupported capabilities raise ``UnsupportedCapabilityError``.
 
 | Exception | When |
 |-----------|------|
+| ``AllChatsError`` | base public exception (alias: ``MessengerError``) |
 | ``ValidationError`` | invalid input / missing config |
 | ``MessengerClientUnavailableError`` | provider client not ready |
 | ``SessionNotConnectedError`` | MAX/session not connected |
 | ``UnsupportedCapabilityError`` | facade capability not supported |
+
+Specific error classes live under ``allchats_sdk.errors`` (internal import path for hosts). Catch ``AllChatsError`` at application boundaries.
 
 ``is_telegram_rpc_error(exc)`` detects Telethon ``RPCError`` when ``[telegram]`` extra is installed.
 
@@ -227,6 +258,7 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 
 Test coverage:
 
+- ``tests/test_public_api.py`` — package-root public exports
 - ``tests/test_registry.py`` — provider registry
 - ``tests/test_credentials.py`` — authorization, sanitize, merge
 - ``tests/test_events.py`` — event payload shapes
