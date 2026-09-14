@@ -55,7 +55,10 @@ client = TelegramClient(
     credential_store=store,
 )
 await client.auth.start_qr()
-# CredentialsUpdatedEvent is handled by the SDK → store.save(...)
+status = await client.auth.wait_until_authorized(
+    password_provider=lambda: input("2FA password: "),
+)
+# status.state is ConnectionState.AUTHORIZED
 await client.connect()  # loads credentials from store
 ```
 
@@ -105,6 +108,7 @@ client = TelegramClient(
     credential_store=store,
 )
 await client.auth.start_qr()
+status = await client.auth.wait_until_authorized()
 await client.connect()
 message_id, chat_id = await client.messages.send("hello", chat_id="123")
 ```
@@ -280,6 +284,7 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 Test coverage:
 
 - ``tests/test_public_api.py`` — package-root public exports
+- ``tests/test_connection_state.py`` — typed ConnectionState + wait_until_authorized
 - ``tests/test_credential_store.py`` — File/MemoryCredentialStore + persisting sink
 - ``tests/test_registry.py`` — provider registry
 - ``tests/test_credentials.py`` — authorization, sanitize, merge

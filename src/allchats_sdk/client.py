@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from allchats_sdk.capabilities import ChatReader, MessageSender, MessengerAuthenticator
 from allchats_sdk.errors import MessengerClientUnavailableError, UnsupportedCapabilityError
+from allchats_sdk.models import ConnectionState
 from allchats_sdk.protocols import CredentialStorage, MessengerProvider
 from allchats_sdk.registry import ProviderRegistry, default_registry
 
@@ -171,6 +173,46 @@ class _RegistryAuthenticator:
             oauth_state=oauth_state,
             device_id=device_id,
         )
+
+    async def get_state(self) -> ConnectionState:
+        getter = getattr(self._provider, "client_for_account", None)
+        raw = getter(self._account_id) if getter is not None else None
+        return ConnectionState.from_raw(self._account_id, raw)
+
+    async def wait_until_authorized(
+        self,
+        *,
+        timeout_sec: float = 300.0,
+        poll_interval_sec: float = 0.5,
+        password_provider: Callable[[], Awaitable[str]] | Callable[[], str] | None = None,
+    ) -> ConnectionState:
+        """Poll provider state until authorized (handles password challenge when provided)."""
+        import asyncio
+        import inspect
+
+        from allchats_sdk.errors import AllChatsError
+        from allchats_sdk.models import ConnectionStatus
+
+        deadline = asyncio.get_running_loop().time() + timeout_sec
+        while asyncio.get_running_loop().time() < deadline:
+            status = await self.get_state()
+            if status.is_password_required:
+                if password_provider is None:
+                    raise AllChatsError("password required; pass password_provider=...")
+                password = password_provider()
+                if inspect.isawaitable(password):
+                    password = await password
+                await self.submit_password(str(password or "").strip())
+                await asyncio.sleep(poll_interval_sec)
+                continue
+            if status.is_authorized:
+                return status
+            if status.state == ConnectionStatus.ERROR:
+                raise AllChatsError(status.error or f"{self._provider_id} auth failed")
+            if status.state == ConnectionStatus.NOT_AUTHORIZED and status.error:
+                raise AllChatsError(status.error)
+            await asyncio.sleep(poll_interval_sec)
+        raise TimeoutError(f"{self._provider_id} authorization timed out")
 
     async def _load_credentials(self) -> dict[str, Any]:
         if self._credential_storage is None:
@@ -401,6 +443,34 @@ class _MaxAuthenticator:
         device_id: str = "",
     ) -> dict[str, Any]:
         raise UnsupportedCapabilityError("max", "auth.connect_with_oauth_code")
+
+    async def get_state(self) -> ConnectionState:
+        from allchats_sdk.models import ConnectionStatus
+
+        finder = getattr(self._host, "find_account_runtime", None)
+        runtime = finder(self._account_id) if finder is not None else None
+        if runtime is None:
+            return ConnectionState(
+                connection_id=self._account_id,
+                state=ConnectionStatus.NOT_AUTHORIZED,
+            )
+        return ConnectionState(
+            connection_id=self._account_id,
+            state=ConnectionStatus.AUTHORIZED,
+        )
+
+    async def wait_until_authorized(
+        self,
+        *,
+        timeout_sec: float = 300.0,
+        poll_interval_sec: float = 0.5,
+        password_provider: Callable[[], Awaitable[str]] | Callable[[], str] | None = None,
+    ) -> ConnectionState:
+        _ = timeout_sec, poll_interval_sec, password_provider
+        status = await self.get_state()
+        if status.is_authorized:
+            return status
+        raise UnsupportedCapabilityError("max", "auth.wait_until_authorized")
 
 
 class MaxMessengerClient(MessengerClient):

@@ -3,11 +3,10 @@
 Preferred public API::
 
     store = FileCredentialStore("./telegram-session.json")
-    client = TelegramClient(
-        account_id="acc-1",
-        app_id=...,
-        app_hash=...,
-        credential_store=store,
+    client = TelegramClient(..., credential_store=store)
+    await client.auth.start_qr()
+    status = await client.auth.wait_until_authorized(
+        password_provider=lambda: input("Telegram 2FA password: "),
     )
 
 Requires ``[telegram]`` extra and credentials from https://my.telegram.org/apps
@@ -26,20 +25,11 @@ import os
 import sys
 from pathlib import Path
 
-from allchats_sdk import AllChatsError, ConnectionState, FileCredentialStore, TelegramClient
+from allchats_sdk import FileCredentialStore, TelegramClient
 
 
 def _session_path() -> Path:
     return Path(os.environ.get("TELEGRAM_SESSION_FILE") or "./telegram-session.json")
-
-
-def _connection_state(account_id: str, raw: object) -> ConnectionState:
-    return ConnectionState(
-        connection_id=account_id,
-        state=str(getattr(raw, "state_instance", "") or "unknown"),
-        user_id=str(getattr(raw, "user_id", "") or ""),
-        error=str(getattr(raw, "error", "") or ""),
-    )
 
 
 def _build_client(account_id: str, store: FileCredentialStore) -> TelegramClient:
@@ -55,27 +45,6 @@ def _build_client(account_id: str, store: FileCredentialStore) -> TelegramClient
     )
 
 
-async def _wait_authorized(client: TelegramClient, *, timeout_sec: float = 300.0) -> ConnectionState:
-    assert client.auth is not None
-    deadline = asyncio.get_running_loop().time() + timeout_sec
-    while asyncio.get_running_loop().time() < deadline:
-        raw = await client.chats.client_state()
-        if raw is None:
-            await asyncio.sleep(0.5)
-            continue
-        status = _connection_state(client.account_id, raw)
-        if status.state == "passwordRequired":
-            password = await asyncio.to_thread(input, "Telegram 2FA password: ")
-            await client.auth.submit_password(password.strip())
-            print("[telegram] password submitted, waiting…")
-        if status.state == "authorized" or bool(status.user_id):
-            return status
-        if status.state == "error":
-            raise AllChatsError(status.error or "telegram auth failed")
-        await asyncio.sleep(0.5)
-    raise TimeoutError("telegram authorization timed out")
-
-
 async def connect_via_qr(account_id: str, session_file: Path) -> None:
     store = FileCredentialStore(session_file)
     client = _build_client(account_id, store)
@@ -86,8 +55,10 @@ async def connect_via_qr(account_id: str, session_file: Path) -> None:
     print("Scan this QR link in Telegram → Settings → Devices → Link Desktop Device:")
     print(qr_link)
 
-    authorized = await _wait_authorized(client)
-    print(f"[telegram] authorized user_id={authorized.user_id} state={authorized.state}")
+    authorized = await client.auth.wait_until_authorized(
+        password_provider=lambda: input("Telegram 2FA password: "),
+    )
+    print(f"[telegram] authorized user_id={authorized.user_id} state={authorized.state.value}")
     print(f"[telegram] session saved → {store.path}")
 
     await asyncio.sleep(1)
@@ -97,9 +68,8 @@ async def connect_via_qr(account_id: str, session_file: Path) -> None:
 async def reconnect(account_id: str, session_file: Path) -> None:
     store = FileCredentialStore(session_file)
     client = _build_client(account_id, store)
-    raw = await client.connect()
-    status = _connection_state(account_id, raw)
-    print(f"[telegram] reconnected state={status.state} user_id={status.user_id}")
+    status = await client.connect()
+    print(f"[telegram] reconnected state={status.state.value} user_id={status.user_id}")
     await asyncio.sleep(1)
     await client.disconnect()
 

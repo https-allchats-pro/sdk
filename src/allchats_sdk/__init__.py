@@ -29,6 +29,7 @@ from allchats_sdk.models import (
     Capability,
     Chat,
     ConnectionState,
+    ConnectionStatus,
     Message,
 )
 
@@ -38,6 +39,7 @@ __all__ = [
     "Capability",
     "Chat",
     "ConnectionState",
+    "ConnectionStatus",
     "CredentialStore",
     "FileCredentialStore",
     "MAXClient",
