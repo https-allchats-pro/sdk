@@ -1,3 +1,5 @@
+"""Shared media message-type constants and MIME/extension helpers."""
+
 from __future__ import annotations
 
 from pathlib import Path

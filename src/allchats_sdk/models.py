@@ -1,4 +1,9 @@
-"""Neutral public domain models for allchats-sdk consumers."""
+"""Neutral public domain models for allchats-sdk consumers.
+
+Keep this as a single module while it stays small. Split into ``models/``
+(message.py, chat.py, …) only when the file becomes hard to navigate —
+do not pre-fragment.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,20 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any
+
+__all__ = [
+    "Account",
+    "AuthChallenge",
+    "Capability",
+    "Chat",
+    "ConnectionState",
+    "ConnectionStatus",
+    "Dialog",
+    "Message",
+    "OutgoingMessage",
+    "SentMessage",
+    "normalize_connection_status",
+]
 
 
 class Capability(str, Enum):

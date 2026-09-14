@@ -95,6 +95,15 @@ from allchats_sdk import (
 The **registry** is an internal SDK mechanism. Application code should not import
 ``allchats_sdk.registry``.
 
+## Domain models
+
+Public DTOs live in a single ``models.py`` (`Message`, `Chat`, `Account`,
+`ConnectionState`, `ConnectionStatus`, `Capability`). We only split into a
+``models/`` package if that file outgrows easy navigation — not preemptively.
+
+``allchats_sdk.types`` is an **internal** package of media/voice helpers for
+providers; prefer importing concrete submodules (e.g. ``types.media``).
+
 ## Quick start
 
 ```python

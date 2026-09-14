@@ -1,3 +1,5 @@
+"""Chat participant metadata helpers (avatars, Avito listing tags)."""
+
 from __future__ import annotations
 
 import json

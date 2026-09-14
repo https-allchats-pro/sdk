@@ -1,3 +1,5 @@
+"""ffmpeg-backed audio conversion helpers (Telegram voice, etc.)."""
+
 from __future__ import annotations
 
 import asyncio

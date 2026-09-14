@@ -1,3 +1,5 @@
+"""Shared voice message-type constants and helpers."""
+
 from __future__ import annotations
 
 MESSAGE_TYPE_TEXT = "text"
