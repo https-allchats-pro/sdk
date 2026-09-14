@@ -1,4 +1,6 @@
-"""Minimal host example: SDK EventSink → in-memory Event Bus → feature handler.
+"""Minimal host example: public Message DTO → in-memory Event Bus → feature handler.
+
+Shows how a host maps SDK domain objects without deep-importing event internals.
 
 Run from the allchats-sdk directory:
 
@@ -12,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
+from allchats_sdk import Message
+
 
 # --- tiny Event Bus (mirrors backend internal.event_bus) ---
 
@@ -19,9 +23,9 @@ from typing import Any, Awaitable, Callable
 @dataclass(frozen=True, slots=True)
 class MessageReceived:
     provider: str
-    connection_id: str
-    external_chat_id: str
-    external_message_id: str
+    account_id: str
+    chat_id: str
+    message_id: str
     text: str
     from_id: str = ""
     sent_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -58,8 +62,8 @@ class CrmFeature:
         return None
 
     async def _on_message(self, event: MessageReceived) -> None:
-        self.seen.append(event.external_message_id)
-        print(f"[crm] message {event.external_message_id}: {event.text!r}")
+        self.seen.append(event.message_id)
+        print(f"[crm] message {event.message_id}: {event.text!r}")
 
 
 class FeatureRegistry:
@@ -87,65 +91,47 @@ class FeatureRegistry:
         self._started.clear()
 
 
-# --- SDK EventSink adapter ---
+# --- Host adapter: public Message → domain bus ---
 
 
-class HostEventSink:
-    """Implements allchats_sdk EventSink; publishes domain events."""
+class HostMessageBridge:
+    """Maps public :class:`~allchats_sdk.Message` into the host event bus."""
 
     def __init__(self, bus: EventBus) -> None:
         self._bus = bus
 
-    async def on_incoming(self, event: Any) -> None:
+    async def publish_incoming(self, message: Message) -> None:
         await self._bus.publish(
             MessageReceived(
-                provider=event.provider,
-                connection_id=event.connection_id,
-                external_chat_id=event.external_chat_id,
-                external_message_id=event.external_message_id,
-                text=event.text,
-                from_id=event.from_id,
-                sent_at=event.sent_at or datetime.now(UTC),
+                provider=message.provider,
+                account_id=message.account_id,
+                chat_id=message.chat_id,
+                message_id=message.id,
+                text=message.text,
+                from_id=message.from_id,
+                sent_at=message.sent_at or datetime.now(UTC),
             )
         )
 
-    async def on_outgoing(self, event: Any) -> None:
-        return None
-
-    async def on_credentials_updated(self, event: Any) -> None:
-        return None
-
-    async def on_connection_state(self, event: Any) -> None:
-        return None
-
-    async def on_chats_discovered(self, event: Any) -> None:
-        return None
-
-    async def on_chat_id_remap(self, event: Any) -> None:
-        return None
-
 
 async def main() -> None:
-    from allchats_sdk.events import IncomingMessageEvent
-
     bus = EventBus()
     registry = FeatureRegistry()
     crm = CrmFeature()
 
-    # Config: CRM on, broadcast off — disabled module never starts.
     await registry.start_enabled(
         {"crm": True, "broadcast": False},
         [crm],
         bus,
     )
 
-    sink = HostEventSink(bus)
-    await sink.on_incoming(
-        IncomingMessageEvent(
-            connection_id="acc-1",
+    bridge = HostMessageBridge(bus)
+    await bridge.publish_incoming(
+        Message(
+            id="msg-42",
+            chat_id="chat-1",
+            account_id="acc-1",
             provider="telegram",
-            external_chat_id="chat-1",
-            external_message_id="msg-42",
             from_id="user-7",
             text="hello from SDK",
             sent_at=datetime.now(UTC),

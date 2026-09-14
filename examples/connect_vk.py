@@ -1,5 +1,7 @@
 """Connect a VK account (QR, OAuth, or user access_token).
 
+Uses only the public package-root API.
+
 Requires ``[vk]`` extra. Create an app at https://dev.vk.com/
 
 Run from the allchats-sdk directory:
@@ -8,17 +10,16 @@ Run from the allchats-sdk directory:
 
 Modes:
 
-1) QR (no OAuth redirect needed):
+1) QR:
 
-    export VK_APP_ID=12345678   # optional for QR; required for login/OAuth
     python examples/connect_vk.py --mode qr
 
-2) User token (simplest for scripts):
+2) User token:
 
     export VK_ACCESS_TOKEN=vk1.a....
     python examples/connect_vk.py --mode token
 
-3) VK ID OAuth (PKCE, interactive — same process keeps code_verifier):
+3) VK ID OAuth (PKCE, interactive):
 
     export VK_APP_ID=12345678
     export VK_APP_SECRET=your_secret
@@ -42,6 +43,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+
+from allchats_sdk import Account, AllChatsError, ConnectionState, MessengerClient
 
 
 @dataclass
@@ -110,47 +113,60 @@ def _load_credentials(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-async def _wait_authorized(manager: Any, account_id: str, *, timeout_sec: float = 300.0) -> Any:
+def _is_authorized(credentials: dict[str, Any]) -> bool:
+    return bool(str(credentials.get("user_id") or "").strip()) and bool(
+        str(credentials.get("access_token") or "").strip()
+    )
+
+
+def _connection_state(account: Account, raw: Any) -> ConnectionState:
+    return ConnectionState(
+        connection_id=account.id,
+        state=str(getattr(raw, "state_instance", "") or "unknown"),
+        user_id=str(getattr(raw, "user_id", "") or ""),
+        error=str(getattr(raw, "error", "") or ""),
+    )
+
+
+def _build_client(account: Account, sink: SavingEventSink, *, require_oauth: bool = False) -> MessengerClient:
+    return MessengerClient(
+        account.provider,
+        account.id,
+        settings=_load_settings(require_oauth=require_oauth),
+        event_sink=sink,
+    )
+
+
+async def _wait_authorized(client: MessengerClient, account: Account, *, timeout_sec: float = 300.0) -> ConnectionState:
     deadline = asyncio.get_running_loop().time() + timeout_sec
     while asyncio.get_running_loop().time() < deadline:
-        client = manager.client_for_account(account_id)
-        if client is None:
+        raw = await client.chats.client_state()
+        if raw is None:
             await asyncio.sleep(0.5)
             continue
-        if client.state_instance == "authorized" or client.is_authorized:
-            return client
-        if client.state_instance in {"notAuthorized", "error"} and client.error:
-            raise RuntimeError(client.error)
+        status = _connection_state(account, raw)
+        if status.state == "authorized" or bool(status.user_id):
+            return status
+        if status.state in {"notAuthorized", "error"} and status.error:
+            raise AllChatsError(status.error)
         await asyncio.sleep(0.5)
     raise TimeoutError("vk authorization timed out")
 
 
-def _build_manager(settings: SimpleNamespace, sink: SavingEventSink) -> Any:
-    from allchats_sdk.providers.register import register_builtin_providers
-    from allchats_sdk.registry import default_registry
-
-    register_builtin_providers()
-    return default_registry.create("vk", settings=settings, event_sink=sink)
-
-
-async def connect_qr(account_id: str, session_file: Path) -> None:
-    from allchats_sdk import MessengerClient
-
-    settings = _load_settings()
+async def connect_qr(account: Account, session_file: Path) -> None:
     sink = SavingEventSink()
-    manager = _build_manager(settings, sink)
-    client = MessengerClient.from_provider("vk", account_id, manager)
+    client = _build_client(account, sink)
+    assert client.auth is not None
 
-    # VK start_qr does not take credentials; MessengerClient falls back via TypeError.
     qr = await client.auth.start_qr()
-    payload = manager.to_qr_response(qr)
+    qr_link = getattr(qr, "auth_url", None) or getattr(qr, "qr_link", "") or ""
     print("Open VK on your phone → Profile → QR scanner and scan:")
-    print(payload["qr_link"])
+    print(qr_link)
 
-    authorized = await _wait_authorized(manager, account_id)
-    print(f"[vk] authorized user_id={authorized.user_id}")
+    authorized = await _wait_authorized(client, account)
+    print(f"[vk] authorized user_id={authorized.user_id} state={authorized.state}")
 
-    saved = sink.credentials_by_account.get(account_id)
+    saved = sink.credentials_by_account.get(account.id)
     if saved:
         _save_credentials(session_file, saved)
 
@@ -158,36 +174,32 @@ async def connect_qr(account_id: str, session_file: Path) -> None:
     await client.disconnect()
 
 
-async def connect_token(account_id: str, session_file: Path) -> None:
-    from allchats_sdk import MessengerClient
-
+async def connect_token(account: Account, session_file: Path) -> None:
     access_token = (os.environ.get("VK_ACCESS_TOKEN") or "").strip()
     if not access_token:
         raise SystemExit("Set VK_ACCESS_TOKEN")
 
-    settings = _load_settings()
     sink = SavingEventSink()
-    manager = _build_manager(settings, sink)
+    client = _build_client(account, sink)
+    assert client.auth is not None
 
-    credentials = await manager.connect_with_token(account_id, access_token=access_token)
+    credentials = await client.auth.connect_with_token(access_token)
     _save_credentials(session_file, credentials)
 
-    client = MessengerClient.from_provider("vk", account_id, manager)
-    state = await client.connect(credentials)
-    print(f"[vk] connected state={state.state_instance} user_id={state.user_id}")
+    raw = await client.connect(credentials)
+    status = _connection_state(account, raw)
+    print(f"[vk] connected state={status.state} user_id={status.user_id}")
     await asyncio.sleep(1)
     await client.disconnect()
 
 
-async def connect_oauth(account_id: str, session_file: Path) -> None:
-    """Interactive OAuth: PKCE verifier must stay on the same manager instance."""
-    from allchats_sdk import MessengerClient
-
-    settings = _load_settings(require_oauth=True)
+async def connect_oauth(account: Account, session_file: Path) -> None:
+    """Interactive OAuth: PKCE verifier must stay on the same client instance."""
     sink = SavingEventSink()
-    manager = _build_manager(settings, sink)
+    client = _build_client(account, sink, require_oauth=True)
+    assert client.auth is not None
 
-    url = manager.build_oauth_authorization_url(account_id)
+    url = client.auth.build_oauth_url()
     print("Open this URL in a browser and authorize the app:")
     print(url)
     print()
@@ -199,37 +211,30 @@ async def connect_oauth(account_id: str, session_file: Path) -> None:
     if not code or not state or not device_id:
         raise SystemExit("code, state and device_id are required")
 
-    mapped = manager.resolve_oauth_account_id(state)
-    target_account = mapped or account_id
-    credentials = await manager.connect_with_oauth_code(
-        target_account,
+    credentials = await client.auth.connect_with_oauth_code(
         code=code,
         oauth_state=state,
         device_id=device_id,
     )
     _save_credentials(session_file, credentials)
 
-    client = MessengerClient.from_provider("vk", target_account, manager)
-    state_client = await client.connect(credentials)
-    print(f"[vk] oauth connected state={state_client.state_instance} user_id={state_client.user_id}")
+    raw = await client.connect(credentials)
+    status = _connection_state(account, raw)
+    print(f"[vk] oauth connected state={status.state} user_id={status.user_id}")
     await asyncio.sleep(1)
     await client.disconnect()
 
 
-async def reconnect(account_id: str, session_file: Path) -> None:
-    from allchats_sdk import MessengerClient
-    from allchats_sdk.credentials import vk_authorized
-
+async def reconnect(account: Account, session_file: Path) -> None:
     credentials = _load_credentials(session_file)
-    if not vk_authorized(credentials):
+    if not _is_authorized(credentials):
         raise SystemExit(f"No authorized session in {session_file}")
 
-    settings = _load_settings()
     sink = SavingEventSink()
-    manager = _build_manager(settings, sink)
-    client = MessengerClient.from_provider("vk", account_id, manager)
-    state = await client.connect(credentials)
-    print(f"[vk] reconnected state={state.state_instance} user_id={state.user_id}")
+    client = _build_client(account, sink)
+    raw = await client.connect(credentials)
+    status = _connection_state(account, raw)
+    print(f"[vk] reconnected state={status.state} user_id={status.user_id}")
     await asyncio.sleep(1)
     await client.disconnect()
 
@@ -243,17 +248,20 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
-    account_id = (os.environ.get("VK_ACCOUNT_ID") or "acc-vk-1").strip()
+    account = Account(
+        id=(os.environ.get("VK_ACCOUNT_ID") or "acc-vk-1").strip(),
+        provider="vk",
+    )
     session_file = _session_path()
 
     if args.mode == "qr":
-        await connect_qr(account_id, session_file)
+        await connect_qr(account, session_file)
     elif args.mode == "token":
-        await connect_token(account_id, session_file)
+        await connect_token(account, session_file)
     elif args.mode == "oauth":
-        await connect_oauth(account_id, session_file)
+        await connect_oauth(account, session_file)
     else:
-        await reconnect(account_id, session_file)
+        await reconnect(account, session_file)
 
 
 if __name__ == "__main__":

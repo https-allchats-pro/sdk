@@ -9,6 +9,18 @@ from allchats_sdk.errors import MessengerClientUnavailableError, UnsupportedCapa
 from allchats_sdk.protocols import CredentialStorage, MessengerProvider
 from allchats_sdk.registry import ProviderRegistry, default_registry
 
+_BUILTINS_REGISTERED = False
+
+
+def _ensure_builtin_providers() -> None:
+    global _BUILTINS_REGISTERED
+    if _BUILTINS_REGISTERED:
+        return
+    from allchats_sdk.providers.register import register_builtin_providers
+
+    register_builtin_providers()
+    _BUILTINS_REGISTERED = True
+
 
 class _RegistryMessageSender:
     def __init__(self, provider: Any, account_id: str, provider_id: str) -> None:
@@ -102,9 +114,58 @@ class _RegistryAuthenticator:
 
     async def disconnect(self) -> None:
         disconnect = getattr(self._provider, "disconnect", None)
-        if disconnect is None:
-            raise UnsupportedCapabilityError(self._provider_id, "auth.disconnect")
-        await disconnect(self._account_id)
+        stop_session = getattr(self._provider, "stop_session", None)
+        stop_qr = getattr(self._provider, "stop_qr", None)
+        if disconnect is not None:
+            await disconnect(self._account_id)
+            return
+        if stop_qr is not None:
+            await stop_qr(self._account_id)
+        if stop_session is not None:
+            await stop_session(self._account_id)
+            return
+        raise UnsupportedCapabilityError(self._provider_id, "auth.disconnect")
+
+    async def submit_password(self, password: str) -> None:
+        submit = getattr(self._provider, "submit_password", None)
+        if submit is None:
+            raise UnsupportedCapabilityError(self._provider_id, "auth.submit_password")
+        await submit(self._account_id, password)
+
+    async def connect_with_token(self, access_token: str, **kwargs: Any) -> dict[str, Any]:
+        connect = getattr(self._provider, "connect_with_token", None)
+        if connect is None:
+            raise UnsupportedCapabilityError(self._provider_id, "auth.connect_with_token")
+        return await connect(self._account_id, access_token=access_token, **kwargs)
+
+    def build_oauth_url(self) -> str:
+        build = getattr(self._provider, "build_oauth_authorization_url", None)
+        if build is None:
+            raise UnsupportedCapabilityError(self._provider_id, "auth.build_oauth_url")
+        return build(self._account_id)
+
+    async def connect_with_oauth_code(
+        self,
+        *,
+        code: str,
+        oauth_state: str,
+        device_id: str = "",
+    ) -> dict[str, Any]:
+        resolve = getattr(self._provider, "resolve_oauth_account_id", None)
+        account_id = self._account_id
+        if resolve is not None:
+            mapped = resolve(oauth_state)
+            if mapped:
+                account_id = mapped
+        connect = getattr(self._provider, "connect_with_oauth_code", None)
+        if connect is None:
+            raise UnsupportedCapabilityError(self._provider_id, "auth.connect_with_oauth_code")
+        return await connect(
+            account_id,
+            code=code,
+            oauth_state=oauth_state,
+            device_id=device_id,
+        )
 
     async def _load_credentials(self) -> dict[str, Any]:
         if self._credential_storage is None:
@@ -134,6 +195,7 @@ class MessengerClient:
         if provider is not None:
             self._provider = provider
         else:
+            _ensure_builtin_providers()
             target = registry or default_registry
             self._provider = target.create(self.provider_id, **provider_kwargs)
 
@@ -179,6 +241,7 @@ class MessengerClient:
             hasattr(self._provider, "connect_account")
             or hasattr(self._provider, "start_qr")
             or hasattr(self._provider, "disconnect")
+            or hasattr(self._provider, "stop_session")
         ):
             return None
         return _RegistryAuthenticator(
@@ -278,6 +341,24 @@ class _MaxAuthenticator:
         if stop is None:
             raise UnsupportedCapabilityError("max", "auth.disconnect")
         await stop(self._account_id)
+
+    async def submit_password(self, password: str) -> None:
+        raise UnsupportedCapabilityError("max", "auth.submit_password")
+
+    async def connect_with_token(self, access_token: str, **kwargs: Any) -> dict[str, Any]:
+        raise UnsupportedCapabilityError("max", "auth.connect_with_token")
+
+    def build_oauth_url(self) -> str:
+        raise UnsupportedCapabilityError("max", "auth.build_oauth_url")
+
+    async def connect_with_oauth_code(
+        self,
+        *,
+        code: str,
+        oauth_state: str,
+        device_id: str = "",
+    ) -> dict[str, Any]:
+        raise UnsupportedCapabilityError("max", "auth.connect_with_oauth_code")
 
 
 class MaxMessengerClient:

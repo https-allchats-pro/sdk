@@ -70,19 +70,14 @@ Prefer extending `MessengerClient` over teaching new deep imports.
 
 ```python
 from allchats_sdk import MessengerClient
-from allchats_sdk.protocols import NullEventSink  # host port (internal)
-from allchats_sdk.providers.register import register_builtin_providers
-from allchats_sdk.registry import default_registry
 
-register_builtin_providers()
-manager = default_registry.create(
+# Built-in providers register automatically. Pass host settings + EventSink.
+client = MessengerClient(
     "telegram",
+    account_id,
     settings=settings,
-    event_sink=NullEventSink(),
+    event_sink=event_sink,  # host implements EventSink
 )
-
-# Per-account facade
-client = MessengerClient.from_provider("telegram", account_id, manager)
 await client.connect(credentials)
 message_id, chat_id = await client.messages.send("hello", chat_id="123")
 ```
@@ -95,7 +90,7 @@ Runnable scripts in ``examples/``:
 |--------|----------------|
 | ``examples/connect_telegram.py`` | Telegram QR login, 2FA password, reconnect from saved ``session_data`` |
 | ``examples/connect_vk.py`` | VK QR / user token / VK ID OAuth (PKCE), reconnect from saved token |
-| ``examples/event_bus_host.py`` | Host ``EventSink`` → in-memory event bus → feature handler |
+| ``examples/event_bus_host.py`` | Public ``Message`` DTO → in-memory event bus → feature handler |
 
 ```bash
 cd allchats-sdk
