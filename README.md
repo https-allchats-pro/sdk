@@ -42,24 +42,32 @@ pip install -e "./allchats-sdk[all,dev]"
 
 ## Public API
 
-Preferred **account clients** (no registry / manager knowledge required):
+Preferred **account clients** with automatic session persistence:
 
 ```python
-from allchats_sdk import TelegramClient, VKClient, MAXClient
+from allchats_sdk import TelegramClient, FileCredentialStore
 
+store = FileCredentialStore("./telegram-session.json")
 client = TelegramClient(
     account_id="acc-1",
     app_id=12345,
     app_hash="...",
+    credential_store=store,
 )
-await client.connect(credentials)
-await client.messages.send("hello", chat_id="123")
+await client.auth.start_qr()
+# CredentialsUpdatedEvent is handled by the SDK → store.save(...)
+await client.connect()  # loads credentials from store
 ```
+
+You do **not** need a custom ``EventSink`` or manual credential extraction for normal usage.
+Pass ``event_sink=`` only when the host must observe messages/state.
 
 Stack inside the SDK:
 
 ```text
 TelegramClient → TelegramProvider → MessengerClient → Telegram
+                     ↑
+              CredentialStore (FileCredentialStore / MemoryCredentialStore)
 ```
 
 Also exported (advanced / host wiring):
@@ -87,15 +95,17 @@ The **registry** is an internal SDK mechanism. Application code should not impor
 ## Quick start
 
 ```python
-from allchats_sdk import TelegramClient
+from allchats_sdk import FileCredentialStore, TelegramClient
 
+store = FileCredentialStore("./telegram-session.json")
 client = TelegramClient(
     account_id=account_id,
-    app_id=settings.telegram.app_id,
-    app_hash=settings.telegram.app_hash,
-    event_sink=event_sink,  # optional; defaults to NullEventSink
+    app_id=12345,
+    app_hash="your_app_hash",
+    credential_store=store,
 )
-await client.connect(credentials)
+await client.auth.start_qr()
+await client.connect()
 message_id, chat_id = await client.messages.send("hello", chat_id="123")
 ```
 
@@ -270,6 +280,7 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 Test coverage:
 
 - ``tests/test_public_api.py`` — package-root public exports
+- ``tests/test_credential_store.py`` — File/MemoryCredentialStore + persisting sink
 - ``tests/test_registry.py`` — provider registry
 - ``tests/test_credentials.py`` — authorization, sanitize, merge
 - ``tests/test_events.py`` — event payload shapes

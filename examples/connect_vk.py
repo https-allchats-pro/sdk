@@ -1,8 +1,9 @@
 """Connect a VK account (QR, OAuth, or user access_token).
 
-Preferred public API — account client only::
+Preferred public API::
 
-    client = VKClient(account_id=..., app_id=...)
+    store = FileCredentialStore("./vk-session.json")
+    client = VKClient(account_id=..., app_id=..., credential_store=store)
 
 Requires ``[vk]`` extra. Create an app at https://dev.vk.com/
 
@@ -14,70 +15,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import sys
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
-from allchats_sdk import AllChatsError, ConnectionState, VKClient
-
-
-@dataclass
-class SavingEventSink:
-    credentials_by_account: dict[str, dict[str, Any]] = field(default_factory=dict)
-
-    async def on_incoming(self, event: Any) -> None:
-        return None
-
-    async def on_outgoing(self, event: Any) -> None:
-        return None
-
-    async def on_credentials_updated(self, event: Any) -> None:
-        if event.clear:
-            self.credentials_by_account.pop(event.connection_id, None)
-            print(f"[vk] credentials cleared for {event.connection_id}")
-            return
-        self.credentials_by_account[event.connection_id] = dict(event.credentials or {})
-        print(
-            f"[vk] credentials updated account={event.connection_id} "
-            f"user_id={event.user_id or event.credentials.get('user_id', '')}"
-        )
-
-    async def on_connection_state(self, event: Any) -> None:
-        print(f"[vk] state={event.state} account={event.connection_id} error={event.error!r}")
-
-    async def on_chats_discovered(self, event: Any) -> None:
-        print(f"[vk] chats discovered: {len(event.chats)}")
-
-    async def on_chat_id_remap(self, event: Any) -> None:
-        return None
+from allchats_sdk import AllChatsError, ConnectionState, FileCredentialStore, VKClient
 
 
 def _session_path() -> Path:
     return Path(os.environ.get("VK_SESSION_FILE") or "./vk-session.json")
 
 
-def _save_credentials(path: Path, credentials: dict[str, Any]) -> None:
-    path.write_text(json.dumps(credentials, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[vk] saved session → {path}")
-
-
-def _load_credentials(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return data if isinstance(data, dict) else {}
-
-
-def _is_authorized(credentials: dict[str, Any]) -> bool:
-    return bool(str(credentials.get("user_id") or "").strip()) and bool(
-        str(credentials.get("access_token") or "").strip()
-    )
-
-
-def _connection_state(account_id: str, raw: Any) -> ConnectionState:
+def _connection_state(account_id: str, raw: object) -> ConnectionState:
     return ConnectionState(
         connection_id=account_id,
         state=str(getattr(raw, "state_instance", "") or "unknown"),
@@ -88,7 +37,7 @@ def _connection_state(account_id: str, raw: Any) -> ConnectionState:
 
 def _build_client(
     account_id: str,
-    sink: SavingEventSink,
+    store: FileCredentialStore,
     *,
     require_oauth: bool = False,
 ) -> VKClient:
@@ -104,7 +53,7 @@ def _build_client(
         app_secret=app_secret,
         redirect_uri=redirect_uri,
         scopes=scopes,
-        event_sink=sink,
+        credential_store=store,
     )
 
 
@@ -125,8 +74,8 @@ async def _wait_authorized(client: VKClient, *, timeout_sec: float = 300.0) -> C
 
 
 async def connect_qr(account_id: str, session_file: Path) -> None:
-    sink = SavingEventSink()
-    client = _build_client(account_id, sink)
+    store = FileCredentialStore(session_file)
+    client = _build_client(account_id, store)
     assert client.auth is not None
 
     qr = await client.auth.start_qr()
@@ -136,10 +85,7 @@ async def connect_qr(account_id: str, session_file: Path) -> None:
 
     authorized = await _wait_authorized(client)
     print(f"[vk] authorized user_id={authorized.user_id} state={authorized.state}")
-
-    saved = sink.credentials_by_account.get(account_id)
-    if saved:
-        _save_credentials(session_file, saved)
+    print(f"[vk] session saved → {store.path}")
 
     await asyncio.sleep(1)
     await client.disconnect()
@@ -150,23 +96,22 @@ async def connect_token(account_id: str, session_file: Path) -> None:
     if not access_token:
         raise SystemExit("Set VK_ACCESS_TOKEN")
 
-    sink = SavingEventSink()
-    client = _build_client(account_id, sink)
+    store = FileCredentialStore(session_file)
+    client = _build_client(account_id, store)
     assert client.auth is not None
 
-    credentials = await client.auth.connect_with_token(access_token)
-    _save_credentials(session_file, credentials)
-
-    raw = await client.connect(credentials)
+    await client.auth.connect_with_token(access_token)
+    raw = await client.connect()
     status = _connection_state(account_id, raw)
     print(f"[vk] connected state={status.state} user_id={status.user_id}")
+    print(f"[vk] session saved → {store.path}")
     await asyncio.sleep(1)
     await client.disconnect()
 
 
 async def connect_oauth(account_id: str, session_file: Path) -> None:
-    sink = SavingEventSink()
-    client = _build_client(account_id, sink, require_oauth=True)
+    store = FileCredentialStore(session_file)
+    client = _build_client(account_id, store, require_oauth=True)
     assert client.auth is not None
 
     url = client.auth.build_oauth_url()
@@ -181,28 +126,23 @@ async def connect_oauth(account_id: str, session_file: Path) -> None:
     if not code or not state or not device_id:
         raise SystemExit("code, state and device_id are required")
 
-    credentials = await client.auth.connect_with_oauth_code(
+    await client.auth.connect_with_oauth_code(
         code=code,
         oauth_state=state,
         device_id=device_id,
     )
-    _save_credentials(session_file, credentials)
-
-    raw = await client.connect(credentials)
+    raw = await client.connect()
     status = _connection_state(account_id, raw)
     print(f"[vk] oauth connected state={status.state} user_id={status.user_id}")
+    print(f"[vk] session saved → {store.path}")
     await asyncio.sleep(1)
     await client.disconnect()
 
 
 async def reconnect(account_id: str, session_file: Path) -> None:
-    credentials = _load_credentials(session_file)
-    if not _is_authorized(credentials):
-        raise SystemExit(f"No authorized session in {session_file}")
-
-    sink = SavingEventSink()
-    client = _build_client(account_id, sink)
-    raw = await client.connect(credentials)
+    store = FileCredentialStore(session_file)
+    client = _build_client(account_id, store)
+    raw = await client.connect()
     status = _connection_state(account_id, raw)
     print(f"[vk] reconnected state={status.state} user_id={status.user_id}")
     await asyncio.sleep(1)

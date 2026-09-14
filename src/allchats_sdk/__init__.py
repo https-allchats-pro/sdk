@@ -4,12 +4,14 @@ Public API (stable)
 -------------------
 Preferred account clients::
 
-    from allchats_sdk import TelegramClient
+    from allchats_sdk import TelegramClient, FileCredentialStore
 
+    store = FileCredentialStore("./telegram-session.json")
     client = TelegramClient(
         account_id="acc-1",
         app_id=12345,
         app_hash="...",
+        credential_store=store,
     )
 
 Lower-level typed providers + ``MessengerClient`` remain available for hosts.
@@ -36,9 +38,12 @@ __all__ = [
     "Capability",
     "Chat",
     "ConnectionState",
+    "CredentialStore",
+    "FileCredentialStore",
     "MAXClient",
     "MAXProvider",
     "MaxMessengerClient",
+    "MemoryCredentialStore",
     "Message",
     "MessengerClient",
     "TelegramClient",
@@ -76,4 +81,8 @@ def __getattr__(name: str) -> Any:
         from allchats_sdk.providers.max.provider import MAXProvider
 
         return MAXProvider
+    if name in {"CredentialStore", "FileCredentialStore", "MemoryCredentialStore"}:
+        from allchats_sdk import credential_store as _store
+
+        return getattr(_store, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
