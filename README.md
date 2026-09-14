@@ -47,6 +47,9 @@ Stable imports come from the package root:
 ```python
 from allchats_sdk import (
     MessengerClient,
+    TelegramProvider,
+    VKProvider,
+    MAXProvider,
     Message,
     Chat,
     Account,
@@ -56,28 +59,31 @@ from allchats_sdk import (
 )
 ```
 
-`MaxMessengerClient` is also public (MAX sessions owned by the host).
+`MaxMessengerClient` remains as a thin alias around ``MAXProvider``.
 
-Treat deeper modules as **internal** for application code:
+**Preferred usage** — typed providers, then a generic client:
+
+```python
+telegram = TelegramProvider(settings=settings, event_sink=sink)
+client = MessengerClient(provider=telegram, account_id=account_id)
+await client.connect(credentials)
+```
+
+The **registry** is an internal SDK mechanism for hosts that still resolve providers by name. Application code should not import ``allchats_sdk.registry``.
+
+Treat deeper modules as **internal**:
 
 - `allchats_sdk.registry` / `providers.register` — host wiring
 - `allchats_sdk.host` / `protocols` — host ports (`EventSink`, storage, …)
 - `allchats_sdk.hooks` — optional host hooks
 
-Prefer extending `MessengerClient` over teaching new deep imports.
-
 ## Quick start
 
 ```python
-from allchats_sdk import MessengerClient
+from allchats_sdk import MessengerClient, TelegramProvider
 
-# Built-in providers register automatically. Pass host settings + EventSink.
-client = MessengerClient(
-    "telegram",
-    account_id,
-    settings=settings,
-    event_sink=event_sink,  # host implements EventSink
-)
+telegram = TelegramProvider(settings=settings, event_sink=event_sink)
+client = MessengerClient(provider=telegram, account_id=account_id)
 await client.connect(credentials)
 message_id, chat_id = await client.messages.send("hello", chat_id="123")
 ```
@@ -108,11 +114,12 @@ export VK_ACCESS_TOKEN=… && python examples/connect_vk.py --mode token
 For MAX (host-managed sessions via SessionManager):
 
 ```python
-from allchats_sdk import MaxMessengerClient
+from allchats_sdk import MAXProvider, MessengerClient
 
-max_client = MaxMessengerClient(account_id, session_host=session_manager)
-await max_client.connect()
-await max_client.messages.send("hello", chat_id="12345")
+max_provider = MAXProvider(session_host=session_manager)
+client = MessengerClient(provider=max_provider, account_id=account_id)
+await client.connect()
+await client.messages.send("hello", chat_id="12345")
 ```
 
 ## Providers
@@ -214,10 +221,11 @@ Media metadata keys commonly passed via ``IncomingMessageEvent.metadata``:
 
 ## MessengerClient facade
 
-Capability-based per-account API over registry providers:
+Capability-based per-account API over typed providers:
 
-- ``MessengerClient`` — wraps ``ProviderRegistry`` managers (telegram, vk, whatsapp, …)
-- ``MaxMessengerClient`` — adapter over host ``SessionManager`` for MAX
+- ``TelegramProvider`` / ``VKProvider`` / ``MAXProvider`` — construct explicitly
+- ``MessengerClient(provider=..., account_id=...)`` — per-account facade
+- ``MaxMessengerClient`` — thin alias for ``MAXProvider``
 - ``client.messages`` — send text messages
 - ``client.chats`` — client state / sync (when supported)
 - ``client.auth`` — connect, QR, disconnect (when supported)

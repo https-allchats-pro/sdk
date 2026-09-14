@@ -66,6 +66,8 @@ class VkAccountClient:
 
 
 class VkClientManager:
+    provider_id = "vk"
+
     def __init__(
         self,
         settings: Settings,

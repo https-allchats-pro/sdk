@@ -1,4 +1,4 @@
-"""Unified MessengerClient facade over ProviderRegistry and host-managed MAX sessions."""
+"""Unified MessengerClient facade over typed providers and host-managed MAX sessions."""
 
 from __future__ import annotations
 
@@ -20,6 +20,11 @@ def _ensure_builtin_providers() -> None:
 
     register_builtin_providers()
     _BUILTINS_REGISTERED = True
+
+
+def _resolve_provider_id(provider: Any, fallback: str = "") -> str:
+    raw = getattr(provider, "provider_id", None) or fallback
+    return str(raw or "").strip().lower()
 
 
 class _RegistryMessageSender:
@@ -175,29 +180,57 @@ class _RegistryAuthenticator:
 
 
 class MessengerClient:
-    """Thin per-account facade over a registry-backed provider manager."""
+    """Per-account facade over a typed provider (or legacy registry name).
+
+    Preferred::
+
+        telegram = TelegramProvider(settings=settings, event_sink=sink)
+        client = MessengerClient(provider=telegram, account_id=account_id)
+
+    Legacy (internal / host) still works::
+
+        MessengerClient("telegram", account_id, settings=..., event_sink=...)
+    """
 
     def __init__(
         self,
-        provider_id: str,
-        account_id: str,
+        provider_id: str | None = None,
+        account_id: str | None = None,
         *,
-        registry: ProviderRegistry | None = None,
         provider: MessengerProvider | Any | None = None,
+        registry: ProviderRegistry | None = None,
         credential_storage: CredentialStorage | None = None,
         **provider_kwargs: Any,
     ) -> None:
-        self.provider_id = provider_id.strip().lower()
-        self.account_id = account_id.strip()
-        if not self.account_id:
+        resolved_account_id = str(account_id or "").strip()
+        if not resolved_account_id:
             raise ValueError("account_id is required")
+        self.account_id = resolved_account_id
         self._credential_storage = credential_storage
+        self._session_host: Any | None = None
+
         if provider is not None:
+            if _resolve_provider_id(provider, provider_id or "") == "max" and hasattr(
+                provider, "session_host"
+            ):
+                self.provider_id = "max"
+                self._session_host = getattr(provider, "session_host", provider)
+                self._provider = provider
+                return
+
+            self.provider_id = _resolve_provider_id(provider, provider_id or "")
+            if not self.provider_id:
+                raise ValueError("provider must define provider_id")
             self._provider = provider
-        else:
-            _ensure_builtin_providers()
-            target = registry or default_registry
-            self._provider = target.create(self.provider_id, **provider_kwargs)
+            return
+
+        legacy_id = str(provider_id or "").strip().lower()
+        if not legacy_id:
+            raise ValueError("provider or provider_id is required")
+        self.provider_id = legacy_id
+        _ensure_builtin_providers()
+        target = registry or default_registry
+        self._provider = target.create(self.provider_id, **provider_kwargs)
 
     @classmethod
     def from_provider(
@@ -208,10 +241,11 @@ class MessengerClient:
         *,
         credential_storage: CredentialStorage | None = None,
     ) -> MessengerClient:
+        """Backward-compatible constructor; prefer ``MessengerClient(provider=..., account_id=...)``."""
         return cls(
-            provider_id,
-            account_id,
             provider=provider,
+            account_id=account_id,
+            provider_id=provider_id,
             credential_storage=credential_storage,
         )
 
@@ -221,12 +255,16 @@ class MessengerClient:
 
     @property
     def messages(self) -> MessageSender:
+        if self._session_host is not None:
+            return _MaxMessageSender(self._session_host, self.account_id)
         if not hasattr(self._provider, "send_message"):
             raise UnsupportedCapabilityError(self.provider_id, "messages")
         return _RegistryMessageSender(self._provider, self.account_id, self.provider_id)
 
     @property
     def chats(self) -> ChatReader:
+        if self._session_host is not None:
+            raise UnsupportedCapabilityError(self.provider_id, "chats")
         if not (
             hasattr(self._provider, "client_for_account")
             or hasattr(self._provider, "sync_channels_for_account")
@@ -237,6 +275,8 @@ class MessengerClient:
 
     @property
     def auth(self) -> MessengerAuthenticator | None:
+        if self._session_host is not None:
+            return _MaxAuthenticator(self._session_host, self.account_id)
         if not (
             hasattr(self._provider, "connect_account")
             or hasattr(self._provider, "start_qr")
@@ -252,6 +292,8 @@ class MessengerClient:
         )
 
     async def connect(self, credentials: dict[str, Any] | None = None) -> Any:
+        if self._session_host is not None:
+            return await self._session_host.connect_account(self.account_id)
         creds = credentials
         if creds is None and self._credential_storage is not None:
             stored = await self._credential_storage.get(self.account_id)
@@ -361,31 +403,13 @@ class _MaxAuthenticator:
         raise UnsupportedCapabilityError("max", "auth.connect_with_oauth_code")
 
 
-class MaxMessengerClient:
-    """Adapter when MAX sessions are orchestrated by the host SessionManager."""
-
-    provider_id = "max"
+class MaxMessengerClient(MessengerClient):
+    """Backward-compatible MAX client; prefer ``MessengerClient(provider=MAXProvider(...), ...)``."""
 
     def __init__(self, account_id: str, *, session_host: Any) -> None:
-        self.account_id = account_id.strip()
-        if not self.account_id:
-            raise ValueError("account_id is required")
-        self._host = session_host
+        from allchats_sdk.providers.max.provider import MAXProvider
 
-    @property
-    def messages(self) -> MessageSender:
-        return _MaxMessageSender(self._host, self.account_id)
-
-    @property
-    def auth(self) -> MessengerAuthenticator:
-        return _MaxAuthenticator(self._host, self.account_id)
-
-    async def connect(self, credentials: dict[str, Any] | None = None) -> Any:
-        _ = credentials
-        return await self._host.connect_account(self.account_id)
-
-    async def disconnect(self) -> None:
-        await self.auth.disconnect()
+        super().__init__(provider=MAXProvider(session_host=session_host), account_id=account_id)
 
 
 def _optional_int(value: str | None) -> int | None:

@@ -83,6 +83,8 @@ class TelegramAccountClient:
 
 
 class TelegramClientManager:
+    provider_id = "telegram"
+
     def __init__(
         self,
         settings: Settings,

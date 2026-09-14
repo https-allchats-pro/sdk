@@ -7,7 +7,6 @@ from typing import Any
 
 from allchats_sdk.client import MaxMessengerClient, MessengerClient
 from allchats_sdk.errors import MessengerClientUnavailableError, UnsupportedCapabilityError
-from allchats_sdk.protocols import NullEventSink
 from allchats_sdk.registry import ProviderRegistry
 
 
@@ -20,6 +19,8 @@ class _MockCredentials:
 
 
 class _MockProvider:
+    provider_id = "telegram"
+
     def __init__(self) -> None:
         self.connected_with: dict[str, Any] | None = None
         self.sent: list[dict[str, Any]] = []
@@ -138,10 +139,20 @@ class MessengerClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(UnsupportedCapabilityError):
             _ = client.messages
 
-    async def test_registry_factory_create(self) -> None:
+    async def test_from_provider_kw_preferred(self) -> None:
+        provider = _MockProvider()
+        client = MessengerClient(provider=provider, account_id="acc-1")
+        self.assertEqual(client.provider_id, "telegram")
+        await client.connect({"token": "1"})
+
+    async def test_legacy_registry_factory_create(self) -> None:
         registry = ProviderRegistry()
-        registry.register("mock", lambda **kwargs: _MockProvider())
-        client = MessengerClient("mock", "acc-1", registry=registry, event_sink=NullEventSink())
+
+        class _MockWithId(_MockProvider):
+            provider_id = "mock"
+
+        registry.register("mock", lambda **kwargs: _MockWithId())
+        client = MessengerClient("mock", "acc-1", registry=registry)
         await client.connect({"token": "1"})
         message_id, _ = await client.messages.send("ping", chat_id="42")
         self.assertEqual(message_id, "msg-1")

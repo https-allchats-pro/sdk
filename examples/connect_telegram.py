@@ -31,7 +31,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from allchats_sdk import Account, AllChatsError, ConnectionState, MessengerClient
+from allchats_sdk import Account, AllChatsError, ConnectionState, MessengerClient, TelegramProvider
 
 
 @dataclass
@@ -138,12 +138,8 @@ async def _wait_authorized(client: MessengerClient, account: Account, *, timeout
 
 
 def _build_client(account: Account, sink: SavingEventSink) -> MessengerClient:
-    return MessengerClient(
-        account.provider,
-        account.id,
-        settings=_load_settings(),
-        event_sink=sink,
-    )
+    telegram = TelegramProvider(settings=_load_settings(), event_sink=sink)
+    return MessengerClient(provider=telegram, account_id=account.id)
 
 
 async def connect_via_qr(account: Account, session_file: Path) -> None:

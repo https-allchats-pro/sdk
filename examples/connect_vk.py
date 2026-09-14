@@ -44,7 +44,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from allchats_sdk import Account, AllChatsError, ConnectionState, MessengerClient
+from allchats_sdk import Account, AllChatsError, ConnectionState, MessengerClient, VKProvider
 
 
 @dataclass
@@ -129,12 +129,8 @@ def _connection_state(account: Account, raw: Any) -> ConnectionState:
 
 
 def _build_client(account: Account, sink: SavingEventSink, *, require_oauth: bool = False) -> MessengerClient:
-    return MessengerClient(
-        account.provider,
-        account.id,
-        settings=_load_settings(require_oauth=require_oauth),
-        event_sink=sink,
-    )
+    vk = VKProvider(settings=_load_settings(require_oauth=require_oauth), event_sink=sink)
+    return MessengerClient(provider=vk, account_id=account.id)
 
 
 async def _wait_authorized(client: MessengerClient, account: Account, *, timeout_sec: float = 300.0) -> ConnectionState:
