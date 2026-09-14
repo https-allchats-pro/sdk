@@ -212,9 +212,9 @@ is processed by the host ``IncomingMessageHandler`` (e.g. ``VoiceMessageService`
 which downloads media, persists messages, and publishes ``MessageReceived`` /
 ``FileReceived`` to the application Event Bus.
 
-## Host ports
+## Protocols
 
-Host implements SDK protocols (``allchats_sdk.host_ports`` / ``allchats_sdk.protocols``):
+Host/backend implements SDK protocols from ``allchats_sdk.protocols``:
 
 | Protocol | Role |
 |----------|------|
@@ -223,8 +223,11 @@ Host implements SDK protocols (``allchats_sdk.host_ports`` / ``allchats_sdk.prot
 | ``DeliveryTracker`` | delivery/read receipt tracking |
 | ``IncomingMessageHandler`` | rich media incoming/outgoing processing |
 | ``CredentialStorage`` | optional persistent credentials (for MessengerClient) |
+| ``MaxSessionHost`` / ``SessionManager`` | MAX session orchestration (host-owned) |
 
 ``NullEventSink`` is a no-op implementation for tests and standalone scripts.
+
+Legacy shims (same symbols): ``allchats_sdk.host_ports``, ``allchats_sdk.host``.
 
 ## Events
 

@@ -1,3 +1,9 @@
+"""Internal VK runtime.
+
+Prefer the public names ``VKProvider`` / ``VKClient``.
+``VkClientManager`` remains for backend and registry wiring.
+"""
+
 from __future__ import annotations
 
 import asyncio

@@ -2,7 +2,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from allchats_sdk.host.ports import SessionManager, SessionRuntime
+    from allchats_sdk.protocols import SessionManager, SessionRuntime
 
 
 class WebSmsCodeProvider:

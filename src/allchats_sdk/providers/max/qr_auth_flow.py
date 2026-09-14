@@ -10,7 +10,7 @@ from pymax.auth.qr import QrAuthFlow
 from allchats_sdk.providers.max.providers import WebQrHandler
 
 if TYPE_CHECKING:
-    from allchats_sdk.host.ports import SessionManager, SessionRuntime
+    from allchats_sdk.protocols import SessionManager, SessionRuntime
 
 
 class WebQrAuthFlow(QrAuthFlow):

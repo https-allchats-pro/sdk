@@ -1,3 +1,9 @@
+"""Internal Telegram runtime.
+
+Prefer the public names ``TelegramProvider`` / ``TelegramClient``.
+``TelegramClientManager`` remains for backend and registry wiring.
+"""
+
 from __future__ import annotations
 
 import asyncio

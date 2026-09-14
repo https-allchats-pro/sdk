@@ -6,7 +6,7 @@ from pymax.auth.models import AuthResult
 from pymax.auth.sms import SmsAuthFlow
 
 if TYPE_CHECKING:
-    from allchats_sdk.host.ports import SessionManager, SessionRuntime
+    from allchats_sdk.protocols import SessionManager, SessionRuntime
 
 
 class WebSmsAuthFlow(SmsAuthFlow):

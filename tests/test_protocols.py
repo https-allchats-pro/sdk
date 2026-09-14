@@ -7,13 +7,15 @@ from typing import Any
 
 from allchats_sdk.capabilities import ChatReader, MessageSender, MessengerAuthenticator
 from allchats_sdk.events import IncomingMessageEvent
-from allchats_sdk.host_ports import (
+from allchats_sdk.protocols import (
     CredentialStorage,
     DeliveryTracker,
+    EventSink,
     IncomingMessageHandler,
     MediaStorage,
+    MessengerProvider,
+    NullEventSink,
 )
-from allchats_sdk.protocols import EventSink, MessengerProvider, NullEventSink
 
 
 class _RecordingEventSink:
@@ -160,11 +162,19 @@ class ProtocolTests(unittest.TestCase):
         sink = _RecordingEventSink()
         self.assertIsInstance(sink, EventSink)
 
-    def test_host_port_implementations(self) -> None:
+    def test_protocol_implementations(self) -> None:
         self.assertIsInstance(_MediaStorageImpl(), MediaStorage)
         self.assertIsInstance(_DeliveryTrackerImpl(), DeliveryTracker)
         self.assertIsInstance(_IncomingHandlerImpl(), IncomingMessageHandler)
         self.assertIsInstance(_CredentialStorageImpl(), CredentialStorage)
+
+    def test_legacy_host_ports_shim(self) -> None:
+        from allchats_sdk import host_ports
+        from allchats_sdk.host import ports as host_ports_pkg
+
+        self.assertIs(host_ports.MediaStorage, MediaStorage)
+        self.assertIs(host_ports_pkg.EventSink, EventSink)
+        self.assertIs(host_ports_pkg.SessionManager, host_ports_pkg.MaxSessionHost)
 
     def test_capability_protocols(self) -> None:
         self.assertIsInstance(_MessageSenderImpl(), MessageSender)

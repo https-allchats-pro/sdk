@@ -29,7 +29,7 @@ from allchats_sdk.providers.common.proxy import proxy_url_from_credentials
 from allchats_sdk.config import Settings
 
 if TYPE_CHECKING:
-    from allchats_sdk.host.ports import SessionManager, SessionRuntime
+    from allchats_sdk.protocols import SessionManager, SessionRuntime
 
 logger = logging.getLogger(__name__)
 

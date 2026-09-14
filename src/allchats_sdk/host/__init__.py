@@ -1,11 +1,17 @@
-from allchats_sdk.host.ports import (
+"""Deprecated compatibility package.
+
+Use ``allchats_sdk.protocols`` for EventSink / MaxSessionHost / storage protocols.
+"""
+
+from __future__ import annotations
+
+from allchats_sdk.protocols import (
     EventSink,
     MaxSessionHost,
     NullEventSink,
     SessionManager,
     SessionRuntime,
 )
-from allchats_sdk.protocols import EventSink as _EventSink
 
 __all__ = [
     "EventSink",
