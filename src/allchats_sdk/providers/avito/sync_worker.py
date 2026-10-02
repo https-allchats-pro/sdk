@@ -52,6 +52,7 @@ async def run_avito_sync_worker(
     stop_event: asyncio.Event,
 ) -> None:
     seen_message_ids: set[str] = set()
+    skipped_without_dialogue: set[str] = set()
     bootstrapped = False
 
     logger.info("starting avito native sync account=%s", account_id[:8])
@@ -91,6 +92,7 @@ async def run_avito_sync_worker(
                         access_token=access_token,
                         event_sink=event_sink,
                         seen_message_ids=seen_message_ids,
+                        skipped_without_dialogue=skipped_without_dialogue,
                         bootstrapped=bootstrapped,
                         sync_started_at_ms=sync_started_at_ms,
                         proxies=proxies,
@@ -136,6 +138,7 @@ async def _sync_chat(
     access_token: str,
     event_sink: EventSink,
     seen_message_ids: set[str],
+    skipped_without_dialogue: set[str],
     bootstrapped: bool,
     sync_started_at_ms: int | None,
     proxies: dict[str, str] | None = None,
@@ -143,6 +146,20 @@ async def _sync_chat(
 ) -> None:
     chat_id = str(chat.get("id") or "").strip()
     if not chat_id:
+        return
+
+    signature = _chat_dialogue_signature(chat)
+    if signature in skipped_without_dialogue:
+        return
+
+    if not await _chat_has_user_dialogue(
+        chat,
+        user_id=user_id,
+        access_token=access_token,
+        proxies=proxies,
+    ):
+        await _hide_chat_without_dialogue(event_sink, account_id, chat_id)
+        skipped_without_dialogue.add(signature)
         return
 
     title = chat_title_from_api(chat, owner_user_id=user_id)
@@ -563,6 +580,8 @@ async def handle_avito_webhook_payload(
     chat_id = str(message.get("chat_id") or "").strip()
     if not chat_id:
         return
+    if not _is_user_dialogue_message(message, owner_user_id=user_id):
+        return
 
     title = chat_id
     proxies = manager.requests_proxies(credentials)
@@ -668,6 +687,68 @@ def _extract_webhook_message(payload: dict[str, Any]) -> dict[str, Any] | None:
         return payload
 
     return None
+
+
+def _is_user_dialogue_message(message: dict[str, Any] | None, *, owner_user_id: str) -> bool:
+    """True when a person in the chat sent the message.
+
+    Avito also returns chats that nobody wrote in, sometimes with a platform
+    ``system`` message. Those are not a dialogue.
+    """
+    if not isinstance(message, dict):
+        return False
+    msg_type = str(message.get("type") or "").strip().lower()
+    if msg_type == "system":
+        return False
+    return _message_direction(message, owner_user_id=owner_user_id) in {"in", "out"}
+
+
+def _chat_dialogue_signature(chat: dict[str, Any]) -> str:
+    chat_id = str(chat.get("id") or "").strip()
+    last_message = chat.get("last_message")
+    last_id = ""
+    if isinstance(last_message, dict):
+        last_id = str(last_message.get("id") or "").strip()
+    return f"{chat_id}:{last_id}"
+
+
+async def _chat_has_user_dialogue(
+    chat: dict[str, Any],
+    *,
+    user_id: str,
+    access_token: str,
+    proxies: dict[str, str] | None,
+) -> bool:
+    last_message = chat.get("last_message")
+    if _is_user_dialogue_message(last_message, owner_user_id=user_id):
+        return True
+    if not isinstance(last_message, dict):
+        return False
+
+    chat_id = str(chat.get("id") or "").strip()
+    if not chat_id:
+        return False
+    messages = await get_chat_messages(
+        user_id=user_id,
+        chat_id=chat_id,
+        access_token=access_token,
+        limit=100,
+        proxies=proxies,
+    )
+    return any(
+        _is_user_dialogue_message(message, owner_user_id=user_id) for message in messages
+    )
+
+
+async def _hide_chat_without_dialogue(
+    event_sink: EventSink,
+    account_id: str,
+    chat_id: str,
+) -> None:
+    handler = getattr(event_sink, "on_chat_without_dialogue", None)
+    if handler is None:
+        return
+    await handler(account_id, chat_id)
 
 
 def _message_direction(message: dict[str, Any], *, owner_user_id: str) -> str | None:
