@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.2
+
+### Avito
+
+- Skip chats without a real dialogue (no user messages on either side)
+- Treat Avito `item` / `system` stubs as non-dialogue so empty
+  "start a conversation" chats are not created
+- Soft-delete previously saved empty Avito chat shells on sync
+
 ## 0.1.1
 
 ### Documentation
