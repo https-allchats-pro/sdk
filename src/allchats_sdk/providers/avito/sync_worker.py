@@ -162,35 +162,15 @@ async def _sync_chat(
         skipped_without_dialogue.add(signature)
         return
 
+    # Do not ensure_chat here: Avito returns many chats that only have an
+    # item/system stub and show "start a conversation". Chat rows are created
+    # when a real message is persisted below / via webhook.
     title = chat_title_from_api(chat, owner_user_id=user_id)
-    avatar_url = chat_avatar_from_api(chat, owner_user_id=user_id)
-    listing = chat_listing_from_api(chat)
-    if listing:
-        listing = await enrich_listing_city(
-            listing,
-            user_id=user_id,
-            access_token=access_token,
-            proxies=proxies,
-        )
-
-    chat_payload: dict[str, Any] = {
-        "external_chat_id": chat_id,
-        "title": title,
-    }
-    if avatar_url:
-        chat_payload["avatar_url"] = avatar_url
-    if listing:
-        chat_payload["listing"] = listing
-
-    await event_sink.on_chats_discovered(
-        ChatsDiscoveredEvent(
-            connection_id=account_id,
-            provider="avito",
-            chats=[chat_payload],
-        )
-    )
 
     if not bootstrapped:
+        # Drop empty shells left by older syncs; keep chats that already have
+        # messages stored locally.
+        await _hide_chat_without_dialogue(event_sink, account_id, chat_id)
         messages = await get_chat_messages(
             user_id=user_id,
             chat_id=chat_id,
@@ -206,6 +186,8 @@ async def _sync_chat(
 
     last_message = chat.get("last_message")
     if not isinstance(last_message, dict):
+        return
+    if not _is_user_dialogue_message(last_message, owner_user_id=user_id):
         return
 
     message_id = str(last_message.get("id") or "").strip()
@@ -253,6 +235,9 @@ async def _sync_chat(
     for message in messages:
         msg_id = str(message.get("id") or "").strip()
         if not msg_id or msg_id in seen_message_ids:
+            continue
+        if not _is_user_dialogue_message(message, owner_user_id=user_id):
+            seen_message_ids.add(msg_id)
             continue
         msg_direction = _message_direction(message, owner_user_id=user_id)
         if msg_direction == "in":
@@ -690,17 +675,33 @@ def _extract_webhook_message(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _is_user_dialogue_message(message: dict[str, Any] | None, *, owner_user_id: str) -> bool:
-    """True when a person in the chat sent the message.
+    """True when a person in the chat actually wrote.
 
-    Avito also returns chats that nobody wrote in, sometimes with a platform
-    ``system`` message. Those are not a dialogue.
+    Avito also returns chats nobody wrote in. They often carry a platform
+    ``system`` stub or an ``item`` card (listing preview) and the UI shows
+    "start a conversation". Those are not a dialogue.
     """
     if not isinstance(message, dict):
         return False
-    msg_type = str(message.get("type") or "").strip().lower()
-    if msg_type == "system":
+    msg_type = str(message.get("type") or "").strip().lower() or "text"
+    if msg_type in {"system", "item", "deleted"}:
         return False
-    return _message_direction(message, owner_user_id=owner_user_id) in {"in", "out"}
+    if _message_direction(message, owner_user_id=owner_user_id) not in {"in", "out"}:
+        return False
+    if msg_type in {"image", "voice", "location", "call"}:
+        return True
+    content = message.get("content") or {}
+    if not isinstance(content, dict):
+        return False
+    if str(content.get("text") or "").strip():
+        return True
+    if msg_type == "link":
+        link = content.get("link") or {}
+        if isinstance(link, dict) and (
+            str(link.get("text") or "").strip() or str(link.get("url") or "").strip()
+        ):
+            return True
+    return False
 
 
 def _chat_dialogue_signature(chat: dict[str, Any]) -> str:

@@ -19,13 +19,41 @@ class UserDialogueTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    def test_item_card_is_not_a_dialogue(self) -> None:
+        self.assertFalse(
+            _is_user_dialogue_message(
+                {
+                    "id": "1",
+                    "type": "item",
+                    "direction": "in",
+                    "author_id": 2,
+                    "content": {"item": {"title": "Пороги"}},
+                },
+                owner_user_id="1",
+            )
+        )
+
     def test_missing_last_message_is_not_a_dialogue(self) -> None:
         self.assertFalse(_is_user_dialogue_message(None, owner_user_id="1"))
+
+    def test_empty_text_is_not_a_dialogue(self) -> None:
+        self.assertFalse(
+            _is_user_dialogue_message(
+                {"id": "1", "type": "text", "direction": "in", "author_id": 2},
+                owner_user_id="1",
+            )
+        )
 
     def test_incoming_text_is_a_dialogue(self) -> None:
         self.assertTrue(
             _is_user_dialogue_message(
-                {"id": "1", "type": "text", "direction": "in", "author_id": 2},
+                {
+                    "id": "1",
+                    "type": "text",
+                    "direction": "in",
+                    "author_id": 2,
+                    "content": {"text": "Здравствуйте"},
+                },
                 owner_user_id="1",
             )
         )
@@ -33,7 +61,12 @@ class UserDialogueTests(unittest.IsolatedAsyncioTestCase):
     def test_outgoing_text_is_a_dialogue(self) -> None:
         self.assertTrue(
             _is_user_dialogue_message(
-                {"id": "1", "type": "text", "author_id": 7},
+                {
+                    "id": "1",
+                    "type": "text",
+                    "author_id": 7,
+                    "content": {"text": "Ещё актуально?"},
+                },
                 owner_user_id="7",
             )
         )
@@ -46,6 +79,39 @@ class UserDialogueTests(unittest.IsolatedAsyncioTestCase):
             proxies=None,
         )
         self.assertFalse(has_dialogue)
+
+    async def test_item_last_message_checks_history(self) -> None:
+        with patch(
+            "allchats_sdk.providers.avito.sync_worker.get_chat_messages",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "id": "i",
+                        "type": "item",
+                        "direction": "in",
+                        "author_id": 2,
+                        "content": {"item": {"title": "Пороги"}},
+                    },
+                ]
+            ),
+        ) as get_messages:
+            has_dialogue = await _chat_has_user_dialogue(
+                {
+                    "id": "c1",
+                    "last_message": {
+                        "id": "i",
+                        "type": "item",
+                        "direction": "in",
+                        "author_id": 2,
+                        "content": {"item": {"title": "Пороги"}},
+                    },
+                },
+                user_id="1",
+                access_token="token",
+                proxies=None,
+            )
+        self.assertFalse(has_dialogue)
+        get_messages.assert_awaited_once()
 
     async def test_system_last_message_checks_history(self) -> None:
         with patch(
@@ -94,3 +160,38 @@ class UserDialogueTests(unittest.IsolatedAsyncioTestCase):
         sink.on_chats_discovered.assert_not_called()
         sink.on_chat_without_dialogue.assert_awaited_once_with("account-1", "chat-1")
         self.assertIn("chat-1:", skipped)
+
+    async def test_sync_does_not_create_shell_chat_for_item_only(self) -> None:
+        sink = AsyncMock()
+        sink.on_chat_without_dialogue = AsyncMock()
+        skipped: set[str] = set()
+
+        with patch(
+            "allchats_sdk.providers.avito.sync_worker.get_chat_messages",
+            new=AsyncMock(return_value=[]),
+        ):
+            await _sync_chat(
+                "account-1",
+                chat={
+                    "id": "chat-2",
+                    "users": [],
+                    "last_message": {
+                        "id": "item-1",
+                        "type": "item",
+                        "direction": "out",
+                        "author_id": 1,
+                        "content": {"item": {"title": "Пороги"}},
+                    },
+                },
+                user_id="1",
+                access_token="token",
+                event_sink=sink,
+                seen_message_ids=set(),
+                skipped_without_dialogue=skipped,
+                bootstrapped=False,
+                sync_started_at_ms=None,
+                manager=AsyncMock(),
+            )
+
+        sink.on_chats_discovered.assert_not_called()
+        sink.on_chat_without_dialogue.assert_awaited_once_with("account-1", "chat-2")
