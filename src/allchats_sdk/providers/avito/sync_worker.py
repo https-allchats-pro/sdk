@@ -171,17 +171,19 @@ async def _sync_chat(
         # Drop empty shells left by older syncs; keep chats that already have
         # messages stored locally.
         await _hide_chat_without_dialogue(event_sink, account_id, chat_id)
-        messages = await get_chat_messages(
-            user_id=user_id,
+        await _import_chat_message_history(
+            account_id,
             chat_id=chat_id,
+            title=title,
+            user_id=user_id,
             access_token=access_token,
-            limit=MESSAGES_BACKFILL_LIMIT,
+            event_sink=event_sink,
+            seen_message_ids=seen_message_ids,
+            sync_started_at_ms=sync_started_at_ms,
+            manager=manager,
             proxies=proxies,
+            limit=MESSAGES_BACKFILL_LIMIT,
         )
-        for message in messages:
-            message_id = str(message.get("id") or "").strip()
-            if message_id:
-                seen_message_ids.add(message_id)
         return
 
     last_message = chat.get("last_message")
@@ -270,6 +272,76 @@ async def _sync_chat(
             )
         else:
             seen_message_ids.add(msg_id)
+
+
+async def _import_chat_message_history(
+    account_id: str,
+    *,
+    chat_id: str,
+    title: str,
+    user_id: str,
+    access_token: str,
+    event_sink: EventSink,
+    seen_message_ids: set[str],
+    sync_started_at_ms: int | None,
+    manager: AvitoClientManager,
+    proxies: dict[str, str] | None,
+    limit: int,
+) -> None:
+    try:
+        messages = await get_chat_messages(
+            user_id=user_id,
+            chat_id=chat_id,
+            access_token=access_token,
+            limit=limit,
+            proxies=proxies,
+        )
+    except Exception:
+        logger.debug(
+            "avito bootstrap history failed account=%s chat=%s",
+            account_id[:8],
+            chat_id,
+            exc_info=True,
+        )
+        return
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        message_id = str(message.get("id") or "").strip()
+        if message_id:
+            seen_message_ids.add(message_id)
+        if not _is_user_dialogue_message(message, owner_user_id=user_id):
+            continue
+        direction = _message_direction(message, owner_user_id=user_id)
+        if direction == "in":
+            await _handle_message(
+                account_id,
+                chat_id=chat_id,
+                title=title,
+                owner_user_id=user_id,
+                message=message,
+                event_sink=event_sink,
+                seen_message_ids=seen_message_ids,
+                sync_started_at_ms=sync_started_at_ms,
+                manager=manager,
+                access_token=access_token,
+                proxies=proxies,
+            )
+        elif direction == "out":
+            await _handle_outgoing_message(
+                account_id,
+                chat_id=chat_id,
+                title=title,
+                owner_user_id=user_id,
+                message=message,
+                event_sink=event_sink,
+                seen_message_ids=seen_message_ids,
+                sync_started_at_ms=sync_started_at_ms,
+                manager=manager,
+                access_token=access_token,
+                proxies=proxies,
+            )
 
 
 async def _persist_incoming_message(
