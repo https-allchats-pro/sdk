@@ -385,6 +385,40 @@ def get_conversation_message_id(
     return int(cmid)
 
 
+def mark_messages_as_read(
+    *,
+    access_token: str,
+    peer_id: int,
+    start_message_id: int | None = None,
+    proxies: dict[str, str] | None = None,
+) -> None:
+    params: dict[str, object] = {"peer_id": peer_id}
+    if start_message_id is not None:
+        params["start_message_id"] = start_message_id
+    vk_method(
+        "messages.markAsRead",
+        access_token=access_token,
+        proxies=proxies,
+        **params,
+    )
+
+
+async def mark_messages_as_read_async(
+    *,
+    access_token: str,
+    peer_id: int,
+    start_message_id: int | None = None,
+    proxies: dict[str, str] | None = None,
+) -> None:
+    await asyncio.to_thread(
+        mark_messages_as_read,
+        access_token=access_token,
+        peer_id=peer_id,
+        start_message_id=start_message_id,
+        proxies=proxies,
+    )
+
+
 async def get_conversation_message_id_async(
     *,
     access_token: str,

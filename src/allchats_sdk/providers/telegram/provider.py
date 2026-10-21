@@ -41,6 +41,19 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_NOT_CONFIGURED = "telegram app_id and app_hash are not configured"
 
+
+def _message_queue_enabled(settings: Settings) -> bool:
+    message_queue = getattr(settings, "message_queue", None)
+    return bool(message_queue and getattr(message_queue, "enabled", False))
+
+
+def _telegram_webhook_only(settings: Settings) -> bool:
+    telegram = getattr(settings, "telegram", None)
+    if telegram is None:
+        return False
+    configured = bool(getattr(telegram, "webhook_configured", lambda: False)())
+    return configured and _message_queue_enabled(settings)
+
 # Telegram default reactions use specific codepoints (no FE0F, 😁 instead of 😂, etc.).
 _TELEGRAM_REACTION_ALIASES: dict[str, str] = {
     "❤️": "❤",
@@ -197,6 +210,15 @@ class TelegramProvider:
                 running=False,
             )
 
+        if _telegram_webhook_only(self._settings):
+            self._creds.set(account_id, credentials)
+            logger.info("telegram webhook+queue mode: skip session worker account=%s", account_id[:8])
+            return self.set_client_state(
+                account_id,
+                state_instance="authorized",
+                running=True,
+            )
+
         self._creds.set(account_id, credentials)
         existing = self.client_for_account(account_id)
         if self._is_session_ready(existing):
@@ -214,6 +236,15 @@ class TelegramProvider:
         if not telegram_authorized(credentials):
             raise ValidationError("account is not authorized")
 
+        if _telegram_webhook_only(self._settings):
+            self._creds.set(account_id, credentials)
+            logger.info("telegram webhook+queue mode: skip session connect account=%s", account_id[:8])
+            return self.set_client_state(
+                account_id,
+                state_instance="authorized",
+                running=True,
+            )
+
         self._creds.set(account_id, credentials)
         existing = self.client_for_account(account_id)
         if self._is_session_ready(existing):
@@ -223,6 +254,19 @@ class TelegramProvider:
             return await self._wait_client_authorized(account_id, credentials)
 
         return await self._start_session_worker(account_id, credentials, wait=True)
+
+    async def handle_webhook(
+        self,
+        account_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        from allchats_sdk.providers.telegram.webhook import handle_telegram_webhook_payload
+
+        await handle_telegram_webhook_payload(
+            account_id,
+            payload,
+            event_sink=self._sink,
+        )
 
     async def _wait_client_authorized(
         self,
@@ -728,6 +772,50 @@ class TelegramProvider:
             "polling_interval": client.polling_interval or 3000,
             "expires_at": client.expires_at,
         }
+
+    async def get_message_by_id(
+        self,
+        account_id: str,
+        *,
+        external_chat_id: str,
+        external_message_id: str,
+    ) -> Any | None:
+        telethon = await self._require_telethon_client(account_id)
+        await self._ensure_entity_cache(account_id, telethon)
+        peer, _ = await self._resolve_send_target(
+            telethon,
+            account_id=account_id,
+            chat_id=str(external_chat_id).strip(),
+            phone_number=None,
+        )
+        try:
+            message_id = int(str(external_message_id).strip())
+        except ValueError:
+            return None
+        messages = await telethon.get_messages(peer, ids=message_id)
+        if isinstance(messages, list):
+            return messages[0] if messages else None
+        return messages
+
+    async def mark_chat_read(
+        self,
+        account_id: str,
+        *,
+        external_chat_id: str,
+        max_message_id: int | None = None,
+    ) -> None:
+        telethon = await self._require_telethon_client(account_id)
+        await self._ensure_entity_cache(account_id, telethon)
+        peer, _ = await self._resolve_send_target(
+            telethon,
+            account_id=account_id,
+            chat_id=str(external_chat_id).strip(),
+            phone_number=None,
+        )
+        if max_message_id is not None:
+            await telethon.send_read_acknowledge(peer, max_id=max_message_id)
+        else:
+            await telethon.send_read_acknowledge(peer)
 
 TelegramClientManager = TelegramProvider
 

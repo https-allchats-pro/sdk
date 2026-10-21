@@ -51,6 +51,19 @@ from allchats_sdk.internal.observability import record_auth
 
 logger = logging.getLogger(__name__)
 
+
+def _message_queue_enabled(settings: Settings) -> bool:
+    message_queue = getattr(settings, "message_queue", None)
+    return bool(message_queue and getattr(message_queue, "enabled", False))
+
+
+def _vk_webhook_only(settings: Settings) -> bool:
+    vk = getattr(settings, "vk", None)
+    if vk is None:
+        return False
+    configured = bool(getattr(vk, "webhook_configured", lambda: False)())
+    return configured and _message_queue_enabled(settings)
+
 VK_NOT_CONFIGURED = "vk app_id, app_secret and redirect_uri are not configured"
 
 
@@ -648,6 +661,16 @@ class VKProvider:
                 running=False,
             )
 
+        if _vk_webhook_only(self._settings):
+            user_id = str(credentials.get("user_id") or "").strip()
+            logger.info("vk webhook+queue mode: skip longpoll account=%s", account_id[:8])
+            return self.set_client_state(
+                account_id,
+                state_instance="authorized",
+                user_id=user_id,
+                running=True,
+            )
+
         existing_task = self._longpoll_tasks.get(account_id)
         if existing_task is not None and not existing_task.done():
             return self.set_client_state(
@@ -744,6 +767,25 @@ class VKProvider:
             raise ValidationError("account is not authorized")
         self._creds.set(account_id, credentials)
         return await self.ensure_longpoll(account_id, credentials)
+
+    async def handle_callback(
+        self,
+        account_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        from allchats_sdk.providers.vk.callback import handle_vk_callback_payload
+
+        credentials = await self.ensure_valid_token(account_id, self._creds.get(account_id))
+        access_token = str(credentials.get("access_token") or "").strip()
+        owner_user_id = str(credentials.get("user_id") or "").strip()
+        await handle_vk_callback_payload(
+            account_id,
+            payload,
+            event_sink=self._sink,
+            access_token=access_token,
+            incoming_handler=self._incoming_handler,
+            owner_user_id=owner_user_id,
+        )
 
     async def send_message(
         self,
@@ -955,6 +997,27 @@ class VKProvider:
             )
         except Exception as exc:
             raise ValidationError(f"failed to delete vk message: {exc}") from exc
+
+    async def mark_chat_read(
+        self,
+        account_id: str,
+        *,
+        external_chat_id: str,
+        start_message_id: int | None = None,
+    ) -> None:
+        credentials = await self.ensure_valid_token(account_id, self._creds.get(account_id))
+        if not vk_authorized(credentials):
+            raise ValidationError("vk account is not authorized")
+        access_token = str(credentials.get("access_token") or "").strip()
+        peer_id = peer_id_from_external_chat_id(external_chat_id.strip())
+        from allchats_sdk.providers.vk.native_api import mark_messages_as_read_async
+
+        await mark_messages_as_read_async(
+            access_token=access_token,
+            peer_id=peer_id,
+            start_message_id=start_message_id,
+            proxies=self.requests_proxies(credentials),
+        )
 
 VkClientManager = VKProvider
 

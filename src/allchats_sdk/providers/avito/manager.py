@@ -43,6 +43,19 @@ logger = logging.getLogger(__name__)
 AVITO_NOT_CONFIGURED = "avito client_id and client_secret are not configured"
 
 
+def _message_queue_enabled(settings: Settings) -> bool:
+    message_queue = getattr(settings, "message_queue", None)
+    return bool(message_queue and getattr(message_queue, "enabled", False))
+
+
+def _avito_webhook_only(settings: Settings) -> bool:
+    avito = getattr(settings, "avito", None)
+    if avito is None:
+        return False
+    configured = bool(getattr(avito, "webhook_configured", lambda: False)())
+    return configured and _message_queue_enabled(settings)
+
+
 @dataclass
 class AvitoAccountClient:
     account_id: str
@@ -333,6 +346,13 @@ class AvitoClientManager:
 
         await self._ensure_webhook(account_id, credentials)
 
+        if _avito_webhook_only(self._settings):
+            logger.info(
+                "avito webhook+queue mode: skip sync worker account=%s",
+                account_id[:8],
+            )
+            return client
+
         poll_interval = max(5, int(self._settings.avito.poll_interval_sec or 15))
         self._sync_tasks[account_id] = asyncio.create_task(
             run_avito_sync_worker(
@@ -357,7 +377,12 @@ class AvitoClientManager:
         proxies = self.requests_proxies(credentials)
         base_url = self._settings.avito.webhook_base_url.rstrip("/")
         secret = quote(self._settings.avito.webhook_secret.strip(), safe="")
-        webhook_url = f"{base_url}/avito/webhook/{account_id}?token={secret}"
+        if _message_queue_enabled(self._settings):
+            webhook_url = (
+                f"{base_url}/webhooks/avito?account_id={quote(account_id, safe='')}&token={secret}"
+            )
+        else:
+            webhook_url = f"{base_url}/avito/webhook/{account_id}?token={secret}"
 
         try:
             subscriptions = await get_subscriptions(access_token, proxies=proxies)
