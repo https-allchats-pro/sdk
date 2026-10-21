@@ -295,6 +295,41 @@ def _auth_headers(access_token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {access_token}"}
 
 
+async def find_chat_by_id(
+    *,
+    user_id: str,
+    chat_id: str,
+    access_token: str,
+    proxies: dict[str, str] | None = None,
+    page_size: int = 50,
+    max_pages: int = 40,
+) -> dict[str, Any] | None:
+    """Paginate messenger/v2 chats until ``chat_id`` is found."""
+    target = str(chat_id or "").strip()
+    if not target:
+        return None
+    offset = 0
+    limit = max(1, min(page_size, 100))
+    for _ in range(max(1, max_pages)):
+        payload = await list_chats(
+            user_id=user_id,
+            access_token=access_token,
+            limit=limit,
+            offset=offset,
+            proxies=proxies,
+        )
+        chats = payload.get("chats") or []
+        if not isinstance(chats, list) or not chats:
+            break
+        for chat in chats:
+            if isinstance(chat, dict) and str(chat.get("id") or "") == target:
+                return chat
+        if len(chats) < limit:
+            break
+        offset += limit
+    return None
+
+
 async def list_chats(
     *,
     user_id: str,

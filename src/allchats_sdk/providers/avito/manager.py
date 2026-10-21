@@ -377,12 +377,9 @@ class AvitoClientManager:
         proxies = self.requests_proxies(credentials)
         base_url = self._settings.avito.webhook_base_url.rstrip("/")
         secret = quote(self._settings.avito.webhook_secret.strip(), safe="")
-        if _message_queue_enabled(self._settings):
-            webhook_url = (
-                f"{base_url}/webhooks/avito?account_id={quote(account_id, safe='')}&token={secret}"
-            )
-        else:
-            webhook_url = f"{base_url}/avito/webhook/{account_id}?token={secret}"
+        # Always use /avito/webhook/{account_id} — it is proxied on avtoporogi nginx and still
+        # enqueues when MESSAGE_QUEUE_ENABLED (see webhook_ingress on the backend route).
+        webhook_url = f"{base_url}/avito/webhook/{account_id}?token={secret}"
 
         try:
             subscriptions = await get_subscriptions(access_token, proxies=proxies)

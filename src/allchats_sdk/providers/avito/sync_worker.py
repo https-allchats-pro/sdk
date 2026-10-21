@@ -17,6 +17,7 @@ from allchats_sdk.providers.avito.client import (
     chat_title_from_api,
     enrich_listing_city,
     extract_message_text,
+    find_chat_by_id,
     get_chat_messages,
     list_chats,
     message_sent_at,
@@ -41,6 +42,26 @@ logger = logging.getLogger(__name__)
 
 CHATS_PAGE_SIZE = 50
 MESSAGES_BACKFILL_LIMIT = 40
+
+
+async def _enrichment_from_chat_api(
+    chat: dict[str, Any],
+    *,
+    owner_user_id: str,
+    access_token: str,
+    proxies: dict[str, str] | None,
+) -> tuple[str, str | None, dict[str, Any] | None]:
+    title = chat_title_from_api(chat, owner_user_id=owner_user_id)
+    avatar_url = chat_avatar_from_api(chat, owner_user_id=owner_user_id)
+    listing = chat_listing_from_api(chat)
+    if listing:
+        listing = await enrich_listing_city(
+            listing,
+            user_id=owner_user_id,
+            access_token=access_token,
+            proxies=proxies,
+        )
+    return title, avatar_url, listing
 
 
 async def run_avito_sync_worker(
@@ -165,7 +186,12 @@ async def _sync_chat(
     # Do not ensure_chat here: Avito returns many chats that only have an
     # item/system stub and show "start a conversation". Chat rows are created
     # when a real message is persisted below / via webhook.
-    title = chat_title_from_api(chat, owner_user_id=user_id)
+    title, avatar_url, listing = await _enrichment_from_chat_api(
+        chat,
+        owner_user_id=user_id,
+        access_token=access_token,
+        proxies=proxies,
+    )
 
     if not bootstrapped:
         # Drop empty shells left by older syncs; keep chats that already have
@@ -183,6 +209,8 @@ async def _sync_chat(
             manager=manager,
             proxies=proxies,
             limit=MESSAGES_BACKFILL_LIMIT,
+            avatar_url=avatar_url,
+            listing=listing,
         )
         return
 
@@ -210,6 +238,8 @@ async def _sync_chat(
             manager=manager,
             access_token=access_token,
             proxies=proxies,
+            avatar_url=avatar_url,
+            listing=listing,
         )
         return
     if direction == "out":
@@ -225,6 +255,8 @@ async def _sync_chat(
             manager=manager,
             access_token=access_token,
             proxies=proxies,
+            avatar_url=avatar_url,
+            listing=listing,
         )
 
     messages = await get_chat_messages(
@@ -255,6 +287,8 @@ async def _sync_chat(
                 manager=manager,
                 access_token=access_token,
                 proxies=proxies,
+                avatar_url=avatar_url,
+                listing=listing,
             )
         elif msg_direction == "out":
             await _handle_outgoing_message(
@@ -269,6 +303,8 @@ async def _sync_chat(
                 manager=manager,
                 access_token=access_token,
                 proxies=proxies,
+                avatar_url=avatar_url,
+                listing=listing,
             )
         else:
             seen_message_ids.add(msg_id)
@@ -287,6 +323,8 @@ async def _import_chat_message_history(
     manager: AvitoClientManager,
     proxies: dict[str, str] | None,
     limit: int,
+    avatar_url: str | None = None,
+    listing: dict[str, Any] | None = None,
 ) -> None:
     try:
         messages = await get_chat_messages(
@@ -327,6 +365,8 @@ async def _import_chat_message_history(
                 manager=manager,
                 access_token=access_token,
                 proxies=proxies,
+                avatar_url=avatar_url,
+                listing=listing,
             )
         elif direction == "out":
             await _handle_outgoing_message(
@@ -341,6 +381,8 @@ async def _import_chat_message_history(
                 manager=manager,
                 access_token=access_token,
                 proxies=proxies,
+                avatar_url=avatar_url,
+                listing=listing,
             )
 
 
@@ -355,6 +397,8 @@ async def _persist_incoming_message(
     manager: AvitoClientManager,
     access_token: str,
     proxies: dict[str, str] | None,
+    avatar_url: str | None = None,
+    listing: dict[str, Any] | None = None,
 ) -> None:
     message_id = str(message.get("id") or "").strip()
     if not message_id:
@@ -427,6 +471,10 @@ async def _persist_incoming_message(
         metadata["media_path"] = media_path
     if duration_ms is not None:
         metadata["duration_ms"] = duration_ms
+    if avatar_url:
+        metadata["avatar_url"] = avatar_url
+    if listing:
+        metadata["listing"] = listing
 
     await event_sink.on_incoming(
         IncomingMessageEvent(
@@ -456,6 +504,8 @@ async def _handle_outgoing_message(
     manager: AvitoClientManager,
     access_token: str,
     proxies: dict[str, str] | None,
+    avatar_url: str | None = None,
+    listing: dict[str, Any] | None = None,
 ) -> None:
     message_id = str(message.get("id") or "").strip()
     if not message_id:
@@ -479,6 +529,8 @@ async def _handle_outgoing_message(
         manager=manager,
         access_token=access_token,
         proxies=proxies,
+        avatar_url=avatar_url,
+        listing=listing,
     )
 
 
@@ -493,6 +545,8 @@ async def _persist_outgoing_message(
     manager: AvitoClientManager,
     access_token: str,
     proxies: dict[str, str] | None,
+    avatar_url: str | None = None,
+    listing: dict[str, Any] | None = None,
 ) -> None:
     message_id = str(message.get("id") or "").strip()
     if not message_id:
@@ -564,6 +618,10 @@ async def _persist_outgoing_message(
         metadata["media_path"] = media_path
     if duration_ms is not None:
         metadata["duration_ms"] = duration_ms
+    if avatar_url:
+        metadata["avatar_url"] = avatar_url
+    if listing:
+        metadata["listing"] = listing
 
     await event_sink.on_outgoing(
         OutgoingMessageEvent(
@@ -593,6 +651,8 @@ async def _handle_message(
     manager: AvitoClientManager,
     access_token: str,
     proxies: dict[str, str] | None,
+    avatar_url: str | None = None,
+    listing: dict[str, Any] | None = None,
 ) -> None:
     message_id = str(message.get("id") or "").strip()
     if not message_id:
@@ -617,6 +677,8 @@ async def _handle_message(
         manager=manager,
         access_token=access_token,
         proxies=proxies,
+        avatar_url=avatar_url,
+        listing=listing,
     )
 
 
@@ -641,44 +703,39 @@ async def handle_avito_webhook_payload(
         return
 
     title = chat_id
+    avatar_url: str | None = None
+    listing: dict[str, Any] | None = None
     proxies = manager.requests_proxies(credentials)
+    access_token = str(credentials.get("access_token") or "").strip()
     try:
-        from allchats_sdk.providers.avito.client import chat_listing_from_api, list_chats
-
-        chats_payload = await list_chats(
+        chat = await find_chat_by_id(
             user_id=user_id,
-            access_token=str(credentials.get("access_token") or ""),
-            limit=CHATS_PAGE_SIZE,
+            chat_id=chat_id,
+            access_token=access_token,
             proxies=proxies,
         )
-        for chat in chats_payload.get("chats") or []:
-            if isinstance(chat, dict) and str(chat.get("id") or "") == chat_id:
-                title = chat_title_from_api(chat, owner_user_id=user_id)
-                avatar_url = chat_avatar_from_api(chat, owner_user_id=user_id)
-                listing = chat_listing_from_api(chat)
-                if listing:
-                    listing = await enrich_listing_city(
-                        listing,
-                        user_id=user_id,
-                        access_token=str(credentials.get("access_token") or ""),
-                        proxies=proxies,
-                    )
-                chat_payload: dict[str, Any] = {
-                    "external_chat_id": chat_id,
-                    "title": title,
-                }
-                if avatar_url:
-                    chat_payload["avatar_url"] = avatar_url
-                if listing:
-                    chat_payload["listing"] = listing
-                await event_sink.on_chats_discovered(
-                    ChatsDiscoveredEvent(
-                        connection_id=account_id,
-                        provider="avito",
-                        chats=[chat_payload],
-                    )
+        if chat is not None:
+            title, avatar_url, listing = await _enrichment_from_chat_api(
+                chat,
+                owner_user_id=user_id,
+                access_token=access_token,
+                proxies=proxies,
+            )
+            chat_payload: dict[str, Any] = {
+                "external_chat_id": chat_id,
+                "title": title,
+            }
+            if avatar_url:
+                chat_payload["avatar_url"] = avatar_url
+            if listing:
+                chat_payload["listing"] = listing
+            await event_sink.on_chats_discovered(
+                ChatsDiscoveredEvent(
+                    connection_id=account_id,
+                    provider="avito",
+                    chats=[chat_payload],
                 )
-                break
+            )
     except Exception:
         logger.debug("avito webhook chat title lookup failed", exc_info=True)
 
@@ -693,7 +750,6 @@ async def handle_avito_webhook_payload(
     ):
         if _message_sent_before_sync(message, sync_started_at_ms):
             return
-        access_token = str(credentials.get("access_token") or "").strip()
         await _persist_outgoing_message(
             account_id,
             chat_id=chat_id,
@@ -704,6 +760,8 @@ async def handle_avito_webhook_payload(
             manager=manager,
             access_token=access_token,
             proxies=proxies,
+            avatar_url=avatar_url,
+            listing=listing,
         )
         return
     if direction != "in":
@@ -713,7 +771,6 @@ async def handle_avito_webhook_payload(
     if _message_sent_before_sync(message, sync_started_at_ms):
         return
 
-    access_token = str(credentials.get("access_token") or "").strip()
     await _persist_incoming_message(
         account_id,
         chat_id=chat_id,
@@ -724,6 +781,8 @@ async def handle_avito_webhook_payload(
         manager=manager,
         access_token=access_token,
         proxies=proxies,
+        avatar_url=avatar_url,
+        listing=listing,
     )
 
 
