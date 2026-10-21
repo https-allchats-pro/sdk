@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "allchats-sdk"
-version = "0.1.2"
+version = "0.1.3"
 description = "Messenger integrations SDK (Telegram, VK, MAX, Avito, Discord, WhatsApp)"
 readme = "README.md"
 requires-python = ">=3.11"

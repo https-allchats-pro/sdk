@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.3
+
+### Telegram
+
+- Added `providers.telegram.webhook` with `handle_telegram_webhook_payload` for Bot API updates
+- `TelegramProvider.handle_webhook`, `get_message_by_id`, and `mark_chat_read`
+- Webhook-only mode skips session workers when webhook is configured
+
+### VK
+
+- Added `providers.vk.callback` helpers for Callback API / webhook workers
+- `VKProvider.mark_chat_read` and `messages.markMessagesAsRead` API wrapper
+
+### Avito
+
+- Webhook payload handler and webhook-only sync worker skip (aligned with Telegram/VK)
+
 ## 0.1.2
 
 ### Avito
