@@ -13,7 +13,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from allchats_sdk.events import IncomingMessageEvent, OutgoingMessageEvent
+from allchats_sdk.events import (
+    IncomingMessageEvent,
+    MessageReactionDeltaEvent,
+    OutgoingMessageEvent,
+)
 
 if TYPE_CHECKING:
     from allchats_sdk.providers.discord.manager import DiscordClientManager
@@ -140,6 +144,49 @@ async def run_discord_selfcord_runtime(
             await _emit_message_event(account_id, manager, client, message)
 
         @client.event
+        async def on_reaction_add(reaction: Any, user: Any) -> None:  # noqa: WPS430
+            await _emit_discord_reaction_delta(
+                account_id,
+                manager,
+                reaction,
+                user,
+                added=True,
+            )
+
+        @client.event
+        async def on_reaction_remove(reaction: Any, user: Any) -> None:  # noqa: WPS430
+            await _emit_discord_reaction_delta(
+                account_id,
+                manager,
+                reaction,
+                user,
+                added=False,
+            )
+
+        @client.event
+        async def on_reaction_clear_emoji(reaction: Any) -> None:  # noqa: WPS430
+            message = getattr(reaction, "message", None)
+            emoji = getattr(reaction, "emoji", None)
+            if message is None or emoji is None:
+                return
+            channel_id = str(getattr(getattr(message, "channel", None), "id", "") or "").strip()
+            message_id = str(getattr(message, "id", "") or "").strip()
+            if not channel_id or not message_id:
+                return
+            emoji_str = str(emoji)
+            await manager.event_sink.on_message_reaction_delta(
+                MessageReactionDeltaEvent(
+                    connection_id=account_id,
+                    provider="discord",
+                    external_chat_id=channel_id,
+                    external_message_id=message_id,
+                    emoji=emoji_str,
+                    actor_id="*",
+                    added=False,
+                )
+            )
+
+        @client.event
         async def on_socket_raw_receive(payload: Any) -> None:  # noqa: WPS430
             await _handle_raw_gateway_event(account_id, manager, payload)
 
@@ -202,6 +249,41 @@ async def run_discord_selfcord_runtime(
 
     manager.set_gateway_ready(account_id, False)
     logger.info("discord selfcord stopped account=%s", account_id[:8])
+
+
+async def _emit_discord_reaction_delta(
+    account_id: str,
+    manager: DiscordClientManager,
+    reaction: Any,
+    user: Any,
+    *,
+    added: bool,
+) -> None:
+    message = getattr(reaction, "message", None)
+    if message is None:
+        return
+    channel_id = str(getattr(getattr(message, "channel", None), "id", "") or "").strip()
+    message_id = str(getattr(message, "id", "") or "").strip()
+    if not channel_id or not message_id:
+        return
+    emoji = getattr(reaction, "emoji", None)
+    emoji_str = str(emoji) if emoji is not None else ""
+    if not emoji_str:
+        return
+    actor_id = str(getattr(user, "id", "") or "").strip()
+    if not actor_id:
+        return
+    await manager.event_sink.on_message_reaction_delta(
+        MessageReactionDeltaEvent(
+            connection_id=account_id,
+            provider="discord",
+            external_chat_id=channel_id,
+            external_message_id=message_id,
+            emoji=emoji_str,
+            actor_id=actor_id,
+            added=added,
+        )
+    )
 
 
 async def _emit_message_event(

@@ -141,6 +141,7 @@ class VkMessageFlag(IntEnum):
 
 class VkEventType(IntEnum):
     MESSAGE_NEW = 4
+    MESSAGE_EDIT = 5
     MESSAGE_READ_OUTBOX = 7
 
 
@@ -312,6 +313,30 @@ async def send_message_async(
     )
 
 
+VK_REACTION_ID_TO_EMOJI: dict[int, str] = {
+    1: "❤",
+    2: "🔥",
+    3: "😂",
+    4: "👍",
+    5: "👎",
+    6: "😍",
+    7: "😮",
+    8: "😢",
+    9: "🙏",
+    10: "👏",
+    11: "🤔",
+    12: "🤯",
+    13: "🤬",
+    14: "😱",
+    15: "🎉",
+    16: "💩",
+}
+
+
+def vk_reaction_id_to_emoji(reaction_id: int) -> str:
+    return VK_REACTION_ID_TO_EMOJI.get(int(reaction_id), f"vk:{reaction_id}")
+
+
 VK_REACTION_EMOJI_TO_ID: dict[str, int] = {
     "❤️": 1,
     "❤": 1,
@@ -381,6 +406,72 @@ def delete_reaction(
         access_token=access_token,
         peer_id=peer_id,
         cmid=cmid,
+        proxies=proxies,
+    )
+
+
+def fetch_message_reactions_map(
+    *,
+    access_token: str,
+    peer_id: int,
+    message_id: int,
+    proxies: dict[str, str] | None = None,
+) -> dict[str, list[str]]:
+    cmid = get_conversation_message_id(
+        access_token=access_token,
+        message_id=int(message_id),
+        proxies=proxies,
+    )
+    if cmid is None:
+        try:
+            cmid = int(message_id)
+        except (TypeError, ValueError):
+            return {}
+
+    payload = vk_method(
+        "messages.getReactedPeers",
+        access_token=access_token,
+        peer_id=int(peer_id),
+        cmid=int(cmid),
+        proxies=proxies,
+    )
+    if not isinstance(payload, dict):
+        return {}
+
+    reactions: dict[str, list[str]] = {}
+    for counter in payload.get("counters") or []:
+        if not isinstance(counter, dict):
+            continue
+        try:
+            reaction_id = int(counter.get("reaction_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not reaction_id:
+            continue
+        emoji = vk_reaction_id_to_emoji(reaction_id)
+        user_ids: list[str] = []
+        for raw_id in counter.get("user_ids") or []:
+            try:
+                user_ids.append(str(int(raw_id)))
+            except (TypeError, ValueError):
+                continue
+        if user_ids:
+            reactions[emoji] = user_ids
+    return reactions
+
+
+async def fetch_message_reactions_map_async(
+    *,
+    access_token: str,
+    peer_id: int,
+    message_id: int,
+    proxies: dict[str, str] | None = None,
+) -> dict[str, list[str]]:
+    return await asyncio.to_thread(
+        fetch_message_reactions_map,
+        access_token=access_token,
+        peer_id=peer_id,
+        message_id=message_id,
         proxies=proxies,
     )
 
@@ -578,6 +669,22 @@ def get_user_names(*, access_token: str, user_ids: list[int]) -> dict[int, str]:
     }
 
 
+def classify_vk_group_members_target(
+    external_id: str,
+    *,
+    is_group: bool,
+) -> tuple[int, str]:
+    """Return VK peer id and listing kind: multichat (beseda) or community (group inbox)."""
+    raw = int(external_id.strip())
+    if raw < 0:
+        return raw, "community"
+    if raw > CHAT_START_ID:
+        return raw, "multichat"
+    if is_group and 0 < raw < 10_000_000:
+        return CHAT_START_ID + raw, "multichat"
+    return raw, "multichat"
+
+
 def peer_id_to_external_chat_id(peer: dict[str, Any]) -> str | None:
     if not isinstance(peer, dict):
         return None
@@ -714,6 +821,28 @@ def parse_conversation_groups(response: dict[str, Any]) -> dict[int, str]:
 def decode_message_text(text: str) -> str:
     normalized = text.replace("<br>", "\n").replace("<br />", "\n")
     return html.unescape(normalized)
+
+
+def parse_message_edit_reference(update: list[Any]) -> dict[str, Any] | None:
+    """VK longpoll MESSAGE_EDIT — used to refresh reactions after edits."""
+    if len(update) < 4:
+        return None
+    if update[0] != VkEventType.MESSAGE_EDIT:
+        return None
+    try:
+        message_id = int(update[1])
+        peer_id = int(update[3])
+    except (TypeError, ValueError):
+        return None
+    if not message_id or not peer_id:
+        return None
+    from allchats_sdk.providers.vk.client import external_chat_id_from_peer
+
+    return {
+        "message_id": str(message_id),
+        "peer_id": peer_id,
+        "external_chat_id": external_chat_id_from_peer(peer_id),
+    }
 
 
 def parse_message_update(update: list[Any]) -> dict[str, Any] | None:

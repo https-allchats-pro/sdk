@@ -19,6 +19,8 @@ from allchats_sdk.events import (
     ConnectionStateEvent,
     CredentialsUpdatedEvent,
     IncomingMessageEvent,
+    MessageReactionDeltaEvent,
+    MessageReactionsUpdatedEvent,
     OutgoingMessageEvent,
 )
 
@@ -151,6 +153,10 @@ class EventSink(Protocol):
 
     async def on_chat_id_remap(self, event: ChatIdRemapEvent) -> None: ...
 
+    async def on_message_reactions_updated(self, event: MessageReactionsUpdatedEvent) -> None: ...
+
+    async def on_message_reaction_delta(self, event: MessageReactionDeltaEvent) -> None: ...
+
 
 class NullEventSink:
     """No-op sink for tests / standalone use."""
@@ -171,6 +177,12 @@ class NullEventSink:
         return None
 
     async def on_chat_id_remap(self, event: ChatIdRemapEvent) -> None:
+        return None
+
+    async def on_message_reactions_updated(self, event: MessageReactionsUpdatedEvent) -> None:
+        return None
+
+    async def on_message_reaction_delta(self, event: MessageReactionDeltaEvent) -> None:
         return None
 
 

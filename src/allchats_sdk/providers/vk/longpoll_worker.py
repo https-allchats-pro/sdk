@@ -5,14 +5,16 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from allchats_sdk.events import IncomingMessageEvent, OutgoingMessageEvent
+from allchats_sdk.events import IncomingMessageEvent, MessageReactionsUpdatedEvent, OutgoingMessageEvent
 from allchats_sdk.providers.vk.native_api import (
     LONGPOLL_WAIT_SEC,
     NativeLongPoll,
     VkNativeApiError,
+    fetch_message_reactions_map_async,
     get_peer_conversation_displays,
     get_user_profiles,
     is_vk_group_peer,
+    parse_message_edit_reference,
     parse_message_update,
     parse_read_outbox_update,
 )
@@ -85,6 +87,35 @@ async def run_vk_longpoll_worker(
                     account_id[:8],
                     read_update.get("external_chat_id"),
                 )
+
+        for update in incoming:
+            if stop_event.is_set():
+                break
+            edit_ref = parse_message_edit_reference(update)
+            if edit_ref is None:
+                continue
+            try:
+                reactions_map = await fetch_message_reactions_map_async(
+                    access_token=access_token,
+                    peer_id=int(edit_ref["peer_id"]),
+                    message_id=int(edit_ref["message_id"]),
+                    proxies=proxies,
+                )
+            except VkNativeApiError as exc:
+                logger.debug("vk reaction sync failed: %s", exc)
+                continue
+            except Exception:
+                logger.debug("vk reaction sync failed", exc_info=True)
+                continue
+            await event_sink.on_message_reactions_updated(
+                MessageReactionsUpdatedEvent(
+                    connection_id=account_id,
+                    provider="vk",
+                    external_chat_id=str(edit_ref["external_chat_id"]),
+                    external_message_id=str(edit_ref["message_id"]),
+                    reactions=reactions_map,
+                )
+            )
 
         parsed_messages = []
         for update in incoming:

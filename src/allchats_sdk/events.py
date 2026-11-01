@@ -70,3 +70,25 @@ class ChatIdRemapEvent:
     provider: str
     chat_key: str
     external_chat_id: str
+
+
+@dataclass
+class MessageReactionsUpdatedEvent:
+    """Full reaction map for a message (emoji -> list of actor user ids)."""
+
+    connection_id: str
+    provider: str
+    external_chat_id: str
+    external_message_id: str
+    reactions: dict[str, list[str]]
+
+
+@dataclass
+class MessageReactionDeltaEvent:
+    connection_id: str
+    provider: str
+    external_chat_id: str
+    external_message_id: str
+    emoji: str
+    actor_id: str
+    added: bool

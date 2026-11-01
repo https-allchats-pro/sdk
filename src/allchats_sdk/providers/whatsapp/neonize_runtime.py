@@ -119,6 +119,26 @@ async def run_whatsapp_neonize_runtime(
         if not message_id:
             return
 
+        from allchats_sdk.events import MessageReactionDeltaEvent
+        from allchats_sdk.reactions import parse_whatsapp_reaction_message
+
+        reaction_parsed = parse_whatsapp_reaction_message(message_proto)
+        if reaction_parsed is not None:
+            target_id, emoji, is_remove = reaction_parsed
+            actor_id = sender if not is_from_me else str(client_state.user_id or account_id)
+            await event_sink.on_message_reaction_delta(
+                MessageReactionDeltaEvent(
+                    connection_id=account_id,
+                    provider="whatsapp",
+                    external_chat_id=external_chat_id,
+                    external_message_id=target_id,
+                    emoji=emoji,
+                    actor_id=actor_id,
+                    added=not is_remove,
+                )
+            )
+            return
+
         is_group = external_chat_id.endswith("@g.us")
         timestamp = getattr(event.Info, "Timestamp", None) or getattr(event.Info, "timestamp", None)
         sent_at = parse_message_timestamp(timestamp)

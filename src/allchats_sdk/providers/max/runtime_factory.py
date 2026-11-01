@@ -25,6 +25,7 @@ from allchats_sdk.providers.max.auth import (
     WebSmsCodeProvider,
 )
 from allchats_sdk.providers.max.trace import max_trace
+from allchats_sdk.reactions import reactions_from_max_counters
 from allchats_sdk.providers.common.proxy import proxy_url_from_credentials
 from allchats_sdk.config import Settings
 
@@ -369,6 +370,26 @@ class MaxRuntimeFactory:
                 name=f"max-incoming-{session_id[:8]}-{message_id}",
             )
             task.add_done_callback(_log_background_task_error)
+
+        if getattr(client, "on_reaction_update", None) is not None:
+
+            @client.on_reaction_update()
+            async def on_reaction_update(event: Any, _client: Client | WebClient) -> None:
+                chat_id = getattr(event, "chat_id", None)
+                message_id = getattr(event, "message_id", None)
+                if chat_id is None or not message_id:
+                    return
+                counters = getattr(event, "counters", None) or []
+                reactions_map = reactions_from_max_counters(list(counters))
+                account_id = runtime.snapshot.account_id or ""
+                if not account_id:
+                    return
+                await self._manager.sync_max_message_reactions(
+                    account_id,
+                    external_chat_id=str(int(chat_id)),
+                    external_message_id=str(message_id),
+                    reactions=reactions_map,
+                )
 
         @client.on_start()
         async def on_start(_client: Client | WebClient) -> None:

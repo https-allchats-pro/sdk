@@ -75,7 +75,9 @@ def _register_message_handlers(
 ) -> None:
     from telethon import events, utils
 
-    from allchats_sdk.events import IncomingMessageEvent, OutgoingMessageEvent
+    from allchats_sdk.events import IncomingMessageEvent, MessageReactionsUpdatedEvent, OutgoingMessageEvent
+    from allchats_sdk.providers.telegram.reactions import build_reactions_map
+    from telethon.tl.types import UpdateMessageReactions
     from allchats_sdk.providers.telegram.media import detect_telegram_media_type
 
     async def _handle_incoming_message(event: Any) -> None:
@@ -295,6 +297,49 @@ def _register_message_handlers(
                 account_id[:8],
                 external_chat_id,
             )
+
+    async def _emit_telegram_reactions(peer: Any, msg_id: int) -> None:
+        try:
+            message = await client.get_messages(peer, ids=msg_id)
+        except Exception:
+            logger.debug("telegram reactions: get_messages failed", exc_info=True)
+            return
+        if message is None:
+            return
+        reactions_map = build_reactions_map(getattr(message, "reactions", None))
+        external_chat_id = str(utils.get_peer_id(peer))
+        await event_sink.on_message_reactions_updated(
+            MessageReactionsUpdatedEvent(
+                connection_id=account_id,
+                provider="telegram",
+                external_chat_id=external_chat_id,
+                external_message_id=str(msg_id),
+                reactions=reactions_map,
+            )
+        )
+
+    @client.on(events.Raw(types=UpdateMessageReactions))
+    async def on_message_reactions_raw(event: Any) -> None:
+        if not client_state.running:
+            return
+        try:
+            await _emit_telegram_reactions(event.peer, int(event.msg_id))
+        except Exception:
+            logger.exception(
+                "failed to sync telegram reactions account=%s",
+                account_id[:8],
+            )
+
+    @client.on(events.MessageEdited())
+    async def on_message_edited_for_reactions(event: Any) -> None:
+        if not client_state.running:
+            return
+        if not getattr(event.message, "reactions", None):
+            return
+        try:
+            await _emit_telegram_reactions(event.peer_id, int(event.message.id))
+        except Exception:
+            logger.debug("telegram reactions from edit failed", exc_info=True)
 
 
 async def run_telegram_session_worker(
