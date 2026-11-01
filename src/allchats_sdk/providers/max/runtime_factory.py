@@ -216,12 +216,22 @@ class MaxRuntimeFactory:
         if getattr(client, "_messager_max_handlers_installed", False):
             return
 
-        original_reset = client._reset_runtime
+        # maxapi-python 2.5+ renamed _reset_runtime → _reset_connection.
+        reset_method = getattr(client, "_reset_runtime", None) or getattr(
+            client, "_reset_connection", None
+        )
+        if reset_method is not None:
+            reset_attr = (
+                "_reset_runtime"
+                if hasattr(client, "_reset_runtime")
+                else "_reset_connection"
+            )
 
-        def reset_with_handlers() -> None:
-            original_reset()
+            def reset_with_handlers() -> None:
+                reset_method()
 
-        client._reset_runtime = reset_with_handlers  # type: ignore[method-assign]
+            setattr(client, reset_attr, reset_with_handlers)
+
         self._register_handlers(runtime)
         client._messager_max_handlers_installed = True
 
