@@ -83,22 +83,17 @@ def get_peer_conversation_displays(
         if longpoll_id is None:
             continue
 
-        chat_settings = conversation.get("chat_settings")
-        title = None
-        if isinstance(chat_settings, dict):
-            title = str(chat_settings.get("title") or "").strip() or None
-        if not title:
-            title = conversation_title(peer, profiles=profiles, groups=groups)
-
-        avatar_url = conversation_avatar_url(peer, profiles=profiles)
-        if not avatar_url and isinstance(chat_settings, dict):
-            photo = chat_settings.get("photo")
-            if isinstance(photo, dict):
-                for key in ("photo_100", "photo_50", "photo_200"):
-                    value = str(photo.get(key) or "").strip()
-                    if value.startswith("http"):
-                        avatar_url = value
-                        break
+        title = conversation_display_title(
+            conversation,
+            peer,
+            profiles=profiles,
+            groups=groups,
+        )
+        avatar_url = conversation_display_avatar(
+            conversation,
+            peer,
+            profiles=profiles,
+        )
 
         displays[longpoll_id] = {
             "name": title or str(longpoll_id),
@@ -601,6 +596,42 @@ def peer_id_to_external_chat_id(peer: dict[str, Any]) -> str | None:
     if peer_type == "email":
         return str(peer_id)
     return str(peer_id)
+
+
+def conversation_display_title(
+    conversation: dict[str, Any] | None,
+    peer: dict[str, Any],
+    *,
+    profiles: dict[int, dict[str, str | None]],
+    groups: dict[int, str],
+) -> str:
+    """Beseda title lives in ``conversation.chat_settings.title``, not in ``groups``."""
+    chat_settings = (conversation or {}).get("chat_settings")
+    if isinstance(chat_settings, dict):
+        from_settings = str(chat_settings.get("title") or "").strip()
+        if from_settings:
+            return from_settings
+    return conversation_title(peer, profiles=profiles, groups=groups)
+
+
+def conversation_display_avatar(
+    conversation: dict[str, Any] | None,
+    peer: dict[str, Any],
+    *,
+    profiles: dict[int, dict[str, str | None]],
+) -> str | None:
+    avatar_url = conversation_avatar_url(peer, profiles=profiles)
+    if avatar_url:
+        return avatar_url
+    chat_settings = (conversation or {}).get("chat_settings")
+    if isinstance(chat_settings, dict):
+        photo = chat_settings.get("photo")
+        if isinstance(photo, dict):
+            for key in ("photo_100", "photo_50", "photo_200"):
+                value = str(photo.get(key) or "").strip()
+                if value.startswith("http"):
+                    return value
+    return None
 
 
 def conversation_title(
