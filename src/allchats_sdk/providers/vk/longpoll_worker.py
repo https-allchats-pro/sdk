@@ -10,7 +10,9 @@ from allchats_sdk.providers.vk.native_api import (
     LONGPOLL_WAIT_SEC,
     NativeLongPoll,
     VkNativeApiError,
+    get_peer_conversation_displays,
     get_user_profiles,
+    is_vk_group_peer,
     parse_message_update,
     parse_read_outbox_update,
 )
@@ -95,26 +97,12 @@ async def run_vk_longpoll_worker(
         if not parsed_messages:
             continue
 
-        missing_profiles = [
-            message["title_peer_id"]
-            for message in parsed_messages
-            if message["title_peer_id"] not in profile_cache
-        ]
-        if missing_profiles:
-            try:
-                fetched = await asyncio.to_thread(
-                    get_user_profiles,
-                    access_token=access_token,
-                    user_ids=missing_profiles,
-                    proxies=proxies,
-                )
-                profile_cache.update(fetched)
-            except VkNativeApiError as exc:
-                logger.warning(
-                    "vk native longpoll users.get failed account=%s: %s",
-                    account_id[:8],
-                    exc,
-                )
+        conversation_cache = await prefetch_vk_message_caches(
+            parsed_messages,
+            access_token=access_token,
+            profile_cache=profile_cache,
+            proxies=proxies,
+        )
 
         for message in parsed_messages:
             if stop_event.is_set():
@@ -126,6 +114,7 @@ async def run_vk_longpoll_worker(
                         message,
                         event_sink,
                         profile_cache,
+                        conversation_cache=conversation_cache,
                         access_token=access_token,
                         incoming_handler=incoming_handler,
                         owner_user_id=owner_user_id,
@@ -136,6 +125,7 @@ async def run_vk_longpoll_worker(
                         message,
                         event_sink,
                         profile_cache,
+                        conversation_cache=conversation_cache,
                         access_token=access_token,
                         incoming_handler=incoming_handler,
                     )
@@ -155,26 +145,37 @@ async def _handle_incoming_message(
     event_sink: EventSink,
     profile_cache: dict[int, dict[str, str | None]],
     *,
+    conversation_cache: dict[int, dict[str, str | None]] | None = None,
     access_token: str,
     incoming_handler: IncomingMessageHandler | None = None,
 ) -> None:
-    peer_id = message["peer_id"]
-    from_id = message["from_id"]
-    title_peer_id = message.get("title_peer_id", from_id)
+    peer_id = int(message["peer_id"])
+    from_id = int(message["from_id"])
+    title_peer_id = int(message.get("title_peer_id", from_id))
     external_chat_id = message.get("external_chat_id") or str(peer_id)
     message_id = str(message["message_id"]).strip()
     if not message_id:
         return
 
-    profile = profile_cache.get(title_peer_id) or {}
-    title = str(profile.get("name") or title_peer_id)
-    avatar_url = profile.get("avatar_url")
     sent_at = _message_sent_at(message)
-    is_group = peer_id > int(2e9)
+    is_group = is_vk_group_peer(peer_id)
+    conversation_cache = conversation_cache or {}
+
+    if is_group:
+        conversation = conversation_cache.get(peer_id) or {}
+        title = str(conversation.get("name") or external_chat_id)
+        avatar_url = conversation.get("avatar_url")
+    else:
+        profile = profile_cache.get(title_peer_id) or {}
+        title = str(profile.get("name") or title_peer_id)
+        avatar_url = profile.get("avatar_url")
+
     from_name = None
+    sender_avatar_url = None
     if is_group:
         sender_profile = profile_cache.get(from_id) or {}
         from_name = str(sender_profile.get("name") or "").strip() or None
+        sender_avatar_url = sender_profile.get("avatar_url")
 
     if incoming_handler is not None:
         await incoming_handler.process_vk_incoming(
@@ -187,6 +188,7 @@ async def _handle_incoming_message(
             avatar_url=avatar_url,
             sent_at=sent_at,
             from_name=from_name,
+            sender_avatar_url=sender_avatar_url,
         )
         return
 
@@ -195,6 +197,8 @@ async def _handle_incoming_message(
         metadata["avatar_url"] = avatar_url
     if from_name:
         metadata["from_name"] = from_name
+    if sender_avatar_url:
+        metadata["from_avatar_url"] = sender_avatar_url
 
     await event_sink.on_incoming(
         IncomingMessageEvent(
@@ -225,20 +229,28 @@ async def _handle_outgoing_message(
     event_sink: EventSink,
     profile_cache: dict[int, dict[str, str | None]],
     *,
+    conversation_cache: dict[int, dict[str, str | None]] | None = None,
     access_token: str,
     incoming_handler: IncomingMessageHandler | None = None,
     owner_user_id: str = "",
 ) -> None:
-    peer_id = message["peer_id"]
-    title_peer_id = message.get("title_peer_id", peer_id)
+    peer_id = int(message["peer_id"])
+    title_peer_id = int(message.get("title_peer_id", peer_id))
     external_chat_id = message.get("external_chat_id") or str(peer_id)
     message_id = str(message["message_id"]).strip()
     if not message_id:
         return
 
-    profile = profile_cache.get(title_peer_id) or {}
-    title = str(profile.get("name") or title_peer_id)
-    avatar_url = profile.get("avatar_url")
+    is_group = is_vk_group_peer(peer_id)
+    conversation_cache = conversation_cache or {}
+    if is_group:
+        conversation = conversation_cache.get(peer_id) or {}
+        title = str(conversation.get("name") or external_chat_id)
+        avatar_url = conversation.get("avatar_url")
+    else:
+        profile = profile_cache.get(title_peer_id) or {}
+        title = str(profile.get("name") or title_peer_id)
+        avatar_url = profile.get("avatar_url")
     sent_at = _message_sent_at(message)
     from_id = str(owner_user_id or message.get("from_id") or account_id)
 
@@ -248,7 +260,7 @@ async def _handle_outgoing_message(
             access_token=access_token,
             parsed=message,
             title=title,
-            is_group=peer_id > int(2e9),
+            is_group=is_group,
             from_id=from_id,
             avatar_url=avatar_url,
             sent_at=sent_at,
@@ -273,7 +285,56 @@ async def _handle_outgoing_message(
             from_id=from_id,
             sent_at=sent_at,
             title=title,
-            is_group=peer_id > int(2e9),
+            is_group=is_group,
             metadata=metadata,
         )
     )
+
+
+async def prefetch_vk_message_caches(
+    parsed_messages: list[dict[str, Any]],
+    *,
+    access_token: str,
+    profile_cache: dict[int, dict[str, str | None]],
+    proxies: dict[str, str] | None = None,
+) -> dict[int, dict[str, str | None]]:
+    conversation_cache: dict[int, dict[str, str | None]] = {}
+    group_peer_ids = [
+        int(message["peer_id"])
+        for message in parsed_messages
+        if is_vk_group_peer(int(message["peer_id"]))
+    ]
+    if group_peer_ids and access_token:
+        try:
+            conversation_cache = await asyncio.to_thread(
+                get_peer_conversation_displays,
+                access_token=access_token,
+                peer_ids=group_peer_ids,
+                proxies=proxies,
+            )
+        except VkNativeApiError as exc:
+            logger.warning("vk prefetch getConversationsById failed: %s", exc)
+
+    missing_user_ids: list[int] = []
+    for message in parsed_messages:
+        peer_id = int(message["peer_id"])
+        if is_vk_group_peer(peer_id):
+            from_id = int(message["from_id"])
+            if from_id not in profile_cache:
+                missing_user_ids.append(from_id)
+        else:
+            title_peer_id = int(message.get("title_peer_id", message["from_id"]))
+            if title_peer_id not in profile_cache:
+                missing_user_ids.append(title_peer_id)
+    if missing_user_ids and access_token:
+        try:
+            fetched = await asyncio.to_thread(
+                get_user_profiles,
+                access_token=access_token,
+                user_ids=missing_user_ids,
+                proxies=proxies,
+            )
+            profile_cache.update(fetched)
+        except VkNativeApiError as exc:
+            logger.warning("vk prefetch users.get failed: %s", exc)
+    return conversation_cache

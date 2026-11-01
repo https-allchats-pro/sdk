@@ -11,7 +11,9 @@ from allchats_sdk.providers.vk.client import external_chat_id_from_peer
 from allchats_sdk.providers.vk.longpoll_worker import (
     _handle_incoming_message,
     _handle_outgoing_message,
+    prefetch_vk_message_caches,
 )
+from allchats_sdk.providers.vk.native_api import is_vk_group_peer
 from allchats_sdk.providers.vk.native_api import decode_message_text
 
 if TYPE_CHECKING:
@@ -39,7 +41,10 @@ def parse_vk_callback_message(payload: dict[str, Any]) -> dict[str, Any] | None:
         return None
     is_outgoing = bool(int(message.get("out") or 0))
     text = decode_message_text(str(message.get("text") or ""))
-    title_peer_id = peer_id if is_outgoing else from_id
+    if is_outgoing or is_vk_group_peer(peer_id):
+        title_peer_id = peer_id
+    else:
+        title_peer_id = from_id
     return {
         "message_id": str(message_id),
         "peer_id": peer_id,
@@ -67,12 +72,18 @@ async def handle_vk_callback_payload(
     if parsed is None:
         return
     profile_cache: dict[int, dict[str, str | None]] = {}
+    conversation_cache = await prefetch_vk_message_caches(
+        [parsed],
+        access_token=access_token,
+        profile_cache=profile_cache,
+    )
     if parsed.get("is_outgoing"):
         await _handle_outgoing_message(
             account_id,
             parsed,
             event_sink,
             profile_cache,
+            conversation_cache=conversation_cache,
             access_token=access_token,
             incoming_handler=incoming_handler,
             owner_user_id=owner_user_id,
@@ -83,6 +94,7 @@ async def handle_vk_callback_payload(
             parsed,
             event_sink,
             profile_cache,
+            conversation_cache=conversation_cache,
             access_token=access_token,
             incoming_handler=incoming_handler,
         )
@@ -100,7 +112,7 @@ async def handle_vk_callback_payload_events(
         return
     sent_at = datetime.fromtimestamp(int(parsed["timestamp"]), tz=UTC)
     peer_id = int(parsed["peer_id"])
-    is_group = peer_id > int(2e9)
+    is_group = is_vk_group_peer(peer_id)
     metadata: dict[str, Any] = {}
     if parsed.get("is_outgoing"):
         await event_sink.on_outgoing(

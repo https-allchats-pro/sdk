@@ -21,6 +21,91 @@ USER_AGENT = (
 )
 
 CHAT_START_ID = int(2e9)
+
+
+def is_vk_group_peer(peer_id: int) -> bool:
+    """Multi-user chat or community (not a 1:1 user dialog)."""
+    return peer_id > CHAT_START_ID or peer_id < 0
+
+
+def peer_dict_to_longpoll_id(peer: dict[str, Any]) -> int | None:
+    if not isinstance(peer, dict):
+        return None
+    peer_type = str(peer.get("type") or "").strip().lower()
+    peer_id = int(peer.get("id") or 0)
+    if not peer_id:
+        return None
+    if peer_type == "user":
+        return peer_id
+    if peer_type == "chat":
+        return CHAT_START_ID + peer_id
+    if peer_type == "group":
+        return -peer_id
+    return peer_id
+
+
+def get_peer_conversation_displays(
+    *,
+    access_token: str,
+    peer_ids: list[int],
+    proxies: dict[str, str] | None = None,
+) -> dict[int, dict[str, str | None]]:
+    """Resolve display name/avatar for longpoll peer ids (group chats, communities)."""
+    unique = list(dict.fromkeys(int(item) for item in peer_ids if int(item)))
+    if not unique:
+        return {}
+
+    payload = vk_method(
+        "messages.getConversationsById",
+        access_token=access_token,
+        peer_ids=",".join(str(item) for item in unique),
+        extended=1,
+        fields="photo_50,photo_100",
+        proxies=proxies,
+    )
+    if not isinstance(payload, dict):
+        return {}
+
+    profiles = parse_conversation_profiles(payload)
+    groups = parse_conversation_groups(payload)
+    displays: dict[int, dict[str, str | None]] = {}
+
+    for item in payload.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        conversation = item.get("conversation")
+        if not isinstance(conversation, dict):
+            continue
+        peer = conversation.get("peer")
+        if not isinstance(peer, dict):
+            continue
+        longpoll_id = peer_dict_to_longpoll_id(peer)
+        if longpoll_id is None:
+            continue
+
+        chat_settings = conversation.get("chat_settings")
+        title = None
+        if isinstance(chat_settings, dict):
+            title = str(chat_settings.get("title") or "").strip() or None
+        if not title:
+            title = conversation_title(peer, profiles=profiles, groups=groups)
+
+        avatar_url = conversation_avatar_url(peer, profiles=profiles)
+        if not avatar_url and isinstance(chat_settings, dict):
+            photo = chat_settings.get("photo")
+            if isinstance(photo, dict):
+                for key in ("photo_100", "photo_50", "photo_200"):
+                    value = str(photo.get(key) or "").strip()
+                    if value.startswith("http"):
+                        avatar_url = value
+                        break
+
+        displays[longpoll_id] = {
+            "name": title or str(longpoll_id),
+            "avatar_url": avatar_url,
+        }
+
+    return displays
 LONGPOLL_WAIT_SEC = 25
 LONGPOLL_MODE = 2 + 8 + 32 + 64 + 128
 
@@ -641,7 +726,10 @@ def parse_message_update(update: list[Any]) -> dict[str, Any] | None:
     if not text.strip() and not has_voice and not has_attachments:
         return None
 
-    title_peer_id = peer_id if is_outgoing else from_id
+    if is_outgoing or is_vk_group_peer(peer_id):
+        title_peer_id = peer_id
+    else:
+        title_peer_id = from_id
 
     return {
         "message_id": str(message_id),
