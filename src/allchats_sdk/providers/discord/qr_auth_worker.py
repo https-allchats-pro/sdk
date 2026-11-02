@@ -3,7 +3,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from allchats_sdk.providers.discord.api import DiscordApiError, exchange_remote_auth_ticket
+from allchats_sdk.providers.discord.api import (
+    DiscordApiError,
+    exchange_remote_auth_ticket,
+    extract_captcha_challenge,
+    is_captcha_challenge,
+)
 from allchats_sdk.providers.discord.remote_auth import DiscordRemoteAuthError, run_remote_auth
 from allchats_sdk.internal.observability import record_auth
 
@@ -31,12 +36,34 @@ async def run_discord_qr_auth_worker(
             manager.set_client_state(account_id, state_instance="qrWaiting", running=True)
 
         async def exchange_ticket(ticket: str) -> dict[str, Any]:
-            return await exchange_remote_auth_ticket(
+            payload = await exchange_remote_auth_ticket(
                 api_base=manager.api_base,
                 ticket=ticket,
                 proxies=proxies,
                 user_agent=manager.user_agent,
             )
+            for _ in range(3):
+                if not is_captcha_challenge(payload):
+                    return payload
+                challenge = extract_captcha_challenge(payload)
+                if not challenge.get("captcha_sitekey"):
+                    raise DiscordApiError(
+                        "discord captcha required but sitekey is missing",
+                        payload=payload,
+                    )
+                solution = await manager.wait_captcha_solution(account_id, challenge)
+                payload = await exchange_remote_auth_ticket(
+                    api_base=manager.api_base,
+                    ticket=ticket,
+                    proxies=proxies,
+                    user_agent=manager.user_agent,
+                    captcha_key=solution,
+                    captcha_session_id=challenge.get("captcha_session_id") or None,
+                    captcha_rqtoken=challenge.get("captcha_rqtoken") or None,
+                )
+            if is_captcha_challenge(payload):
+                raise DiscordApiError("discord captcha was not accepted", payload=payload)
+            return payload
 
         result = await run_remote_auth(
             ws_url=manager.remote_auth_url,

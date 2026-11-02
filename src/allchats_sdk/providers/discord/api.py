@@ -86,6 +86,22 @@ def is_captcha_challenge(payload: Any) -> bool:
     return bool(captcha_key)
 
 
+def captcha_request_headers(
+    *,
+    captcha_key: str | None = None,
+    captcha_session_id: str | None = None,
+    captcha_rqtoken: str | None = None,
+) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if captcha_key:
+        headers["X-Captcha-Key"] = captcha_key
+    if captcha_session_id:
+        headers["X-Captcha-Session-Id"] = captcha_session_id
+    if captcha_rqtoken:
+        headers["X-Captcha-Rqtoken"] = captcha_rqtoken
+    return headers
+
+
 def extract_captcha_challenge(payload: dict[str, Any]) -> dict[str, str]:
     sitekey = str(payload.get("captcha_sitekey") or "").strip()
     service = str(payload.get("captcha_service") or "hcaptcha").strip() or "hcaptcha"
@@ -209,13 +225,11 @@ async def login(
     captcha_session_id: str | None = None,
     captcha_rqtoken: str | None = None,
 ) -> dict[str, Any]:
-    captcha_headers: dict[str, str] = {}
-    if captcha_key:
-        captcha_headers["X-Captcha-Key"] = captcha_key
-    if captcha_session_id:
-        captcha_headers["X-Captcha-Session-Id"] = captcha_session_id
-    if captcha_rqtoken:
-        captcha_headers["X-Captcha-Rqtoken"] = captcha_rqtoken
+    captcha_headers = captcha_request_headers(
+        captcha_key=captcha_key,
+        captcha_session_id=captcha_session_id,
+        captcha_rqtoken=captcha_rqtoken,
+    )
 
     payload = await asyncio.to_thread(
         _request,
@@ -246,7 +260,15 @@ async def submit_mfa_totp(
     code: str,
     proxies: dict[str, str] | None = None,
     user_agent: str = DEFAULT_USER_AGENT,
+    captcha_key: str | None = None,
+    captcha_session_id: str | None = None,
+    captcha_rqtoken: str | None = None,
 ) -> dict[str, Any]:
+    captcha_headers = captcha_request_headers(
+        captcha_key=captcha_key,
+        captcha_session_id=captcha_session_id,
+        captcha_rqtoken=captcha_rqtoken,
+    )
     payload = await asyncio.to_thread(
         _request,
         "POST",
@@ -259,6 +281,8 @@ async def submit_mfa_totp(
         },
         proxies=proxies,
         user_agent=user_agent,
+        extra_headers=captcha_headers or None,
+        accept_captcha=True,
     )
     if not isinstance(payload, dict):
         raise DiscordApiError("unexpected mfa response")
@@ -277,6 +301,9 @@ def _exchange_with_curl_cffi(
     ticket: str,
     proxy_url: str | None,
     user_agent: str,
+    captcha_key: str | None = None,
+    captcha_session_id: str | None = None,
+    captcha_rqtoken: str | None = None,
 ) -> dict[str, Any]:
     from curl_cffi import requests as curl_requests
 
@@ -287,6 +314,12 @@ def _exchange_with_curl_cffi(
     headers = _headers(
         user_agent=user_agent,
         referer="https://discord.com/login",
+        extra=captcha_request_headers(
+            captcha_key=captcha_key,
+            captcha_session_id=captcha_session_id,
+            captcha_rqtoken=captcha_rqtoken,
+        )
+        or None,
     )
     # Warm cookies / Cloudflare clearance similarly to a browser login page visit.
     try:
@@ -323,6 +356,8 @@ def _exchange_with_curl_cffi(
         payload = {"raw": response.text}
 
     if response.status_code >= 400:
+        if response.status_code == 400 and isinstance(payload, dict) and is_captcha_challenge(payload):
+            return payload
         message = _error_message(response.status_code, payload)
         logger.warning(
             "discord curl_cffi ticket exchange status=%s message=%s payload=%s",
@@ -342,6 +377,9 @@ def _exchange_remote_auth_ticket_sync(
     ticket: str,
     proxies: dict[str, str] | None = None,
     user_agent: str = DEFAULT_USER_AGENT,
+    captcha_key: str | None = None,
+    captcha_session_id: str | None = None,
+    captcha_rqtoken: str | None = None,
 ) -> dict[str, Any]:
     # Prefer direct first: shared TELEGRAM/http proxies are frequently captcha'd by Discord.
     # Then retry via the account proxy if one is configured.
@@ -360,6 +398,9 @@ def _exchange_remote_auth_ticket_sync(
                 ticket=ticket,
                 proxy_url=proxy_url,
                 user_agent=user_agent,
+                captcha_key=captcha_key,
+                captcha_session_id=captcha_session_id,
+                captcha_rqtoken=captcha_rqtoken,
             )
         except DiscordApiError as exc:
             last_error = exc
@@ -388,6 +429,13 @@ def _exchange_remote_auth_ticket_sync(
                 user_agent=user_agent,
                 referer="https://discord.com/login",
                 fingerprint=fingerprint,
+                extra_headers=captcha_request_headers(
+                    captcha_key=captcha_key,
+                    captcha_session_id=captcha_session_id,
+                    captcha_rqtoken=captcha_rqtoken,
+                )
+                or None,
+                accept_captcha=True,
             )
         except DiscordApiError as exc:
             last_error = exc
@@ -410,6 +458,9 @@ async def exchange_remote_auth_ticket(
     ticket: str,
     proxies: dict[str, str] | None = None,
     user_agent: str = DEFAULT_USER_AGENT,
+    captcha_key: str | None = None,
+    captcha_session_id: str | None = None,
+    captcha_rqtoken: str | None = None,
 ) -> dict[str, Any]:
     return await asyncio.to_thread(
         _exchange_remote_auth_ticket_sync,
@@ -417,6 +468,9 @@ async def exchange_remote_auth_ticket(
         ticket=ticket,
         proxies=proxies,
         user_agent=user_agent,
+        captcha_key=captcha_key,
+        captcha_session_id=captcha_session_id,
+        captcha_rqtoken=captcha_rqtoken,
     )
 
 

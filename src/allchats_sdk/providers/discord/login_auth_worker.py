@@ -83,6 +83,29 @@ async def run_discord_login_auth_worker(
                 proxies=proxies,
                 user_agent=manager.user_agent,
             )
+            for _ in range(3):
+                if not is_captcha_challenge(mfa_payload):
+                    break
+                challenge = extract_captcha_challenge(mfa_payload)
+                if not challenge.get("captcha_sitekey"):
+                    raise DiscordApiError(
+                        "discord captcha required but sitekey is missing",
+                        payload=mfa_payload,
+                    )
+                solution = await manager.wait_captcha_solution(account_id, challenge)
+                mfa_payload = await submit_mfa_totp(
+                    api_base=manager.api_base,
+                    ticket=ticket,
+                    code=code,
+                    proxies=proxies,
+                    user_agent=manager.user_agent,
+                    captcha_key=solution,
+                    captcha_session_id=challenge.get("captcha_session_id") or None,
+                    captcha_rqtoken=challenge.get("captcha_rqtoken") or None,
+                )
+            else:
+                if is_captcha_challenge(mfa_payload):
+                    raise DiscordApiError("discord captcha was not accepted", payload=mfa_payload)
             mfa_token = str(mfa_payload.get("token") or "").strip()
             if not mfa_token:
                 raise DiscordApiError("mfa succeeded without token", payload=mfa_payload)
