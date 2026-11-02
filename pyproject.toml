@@ -81,6 +81,7 @@ discord = [
   "davey>=0.1.6",
   "curl_cffi>=0.7.0",
   "qrcode>=7.4.2",
+  "PySocks>=1.7.1",
 ]
 avito = [
   "requests>=2.31.0",

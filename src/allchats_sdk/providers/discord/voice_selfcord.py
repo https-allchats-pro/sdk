@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import struct
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote, urlparse
 
 from allchats_sdk.providers.discord.voice_audio_bridge import get_or_create_bridge
 from allchats_sdk.providers.discord.voice_udp import (
@@ -28,6 +30,69 @@ if TYPE_CHECKING:
     from allchats_sdk.providers.discord.manager import DiscordClientManager
 
 logger = logging.getLogger(__name__)
+
+
+def voice_udp_proxy_scheme(proxy_url: str | None) -> str:
+    if not proxy_url:
+        return ""
+    return (urlparse(proxy_url).scheme or "").lower()
+
+
+def voice_udp_requires_socks5(proxy_url: str | None) -> bool:
+    scheme = voice_udp_proxy_scheme(proxy_url)
+    return bool(scheme) and scheme not in {"socks5", "socks5h"}
+
+
+def create_discord_voice_udp_socket(proxy_url: str | None) -> socket.socket:
+    """UDP socket for Discord voice.
+
+    Gateway is often SOCKS5/HTTP proxied while voice UDP went out the VPS IP.
+    Discord then sees two different IPs and force-disconnects (join/leave loop).
+    SOCKS5 UDP ASSOCIATE keeps voice on the same exit as the gateway.
+    """
+    if not proxy_url:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setblocking(False)
+        return sock
+
+    scheme = voice_udp_proxy_scheme(proxy_url)
+    if scheme not in {"socks5", "socks5h"}:
+        raise RuntimeError(
+            "Discord voice needs a SOCKS5 proxy with UDP. "
+            f"{scheme or 'HTTP'} VPN/proxy cannot carry voice UDP, so Discord kicks immediately."
+        )
+
+    parsed = urlparse(proxy_url)
+    host = parsed.hostname
+    port = parsed.port
+    if not host or not port:
+        raise RuntimeError("Discord voice SOCKS5 proxy host/port is missing")
+
+    try:
+        import socks
+    except ImportError as exc:
+        raise RuntimeError("PySocks is required for Discord voice over SOCKS5") from exc
+
+    username = unquote(parsed.username) if parsed.username else None
+    password = unquote(parsed.password) if parsed.password else None
+
+    class SocksVoiceUdpSocket(socks.socksocket):
+        def sendall(self, data: bytes, flags: int = 0) -> None:
+            self.send(data, flags)
+
+    sock = SocksVoiceUdpSocket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.set_proxy(socks.SOCKS5, host, port, True, username, password)
+    sock.settimeout(15)
+    try:
+        sock.bind(("", 0))
+    except OSError as exc:
+        sock.close()
+        raise RuntimeError(
+            "SOCKS5 proxy does not support UDP ASSOCIATE; Discord voice will be kicked"
+        ) from exc
+    sock.settimeout(None)
+    sock.setblocking(False)
+    return sock
 
 
 class DiscordSelfcordVoiceSession:
@@ -59,10 +124,26 @@ class DiscordSelfcordVoiceSession:
 
     async def start(self) -> None:
         vc = self.voice_client
-        # discord.py-self: wait_until_connected is sync and returns bool.
-        connected = bool(vc.wait_until_connected(timeout=30.0))
-        if not connected or not vc.is_connected():
+        conn = getattr(vc, "_connection", None)
+        if conn is not None:
+            try:
+                await conn.wait_async(30.0)
+            except Exception:
+                logger.debug(
+                    "discord voice wait_async failed account=%s",
+                    self.account_id[:8],
+                    exc_info=True,
+                )
+        if not vc.is_connected():
             raise RuntimeError("discord VoiceClient failed to connect")
+
+        deadline = asyncio.get_running_loop().time() + 15.0
+        while asyncio.get_running_loop().time() < deadline:
+            conn = vc._connection
+            dave_version = int(getattr(conn, "dave_protocol_version", 0) or 0)
+            if dave_version <= 0 or bool(getattr(conn, "can_encrypt", False)):
+                break
+            await asyncio.sleep(0.1)
 
         conn = vc._connection
         self._own_ssrc = int(getattr(conn, "ssrc", 0) or 0)
@@ -318,6 +399,14 @@ async def start_selfcord_voice_session(
     if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
         raise RuntimeError("channel is not a voice channel")
 
+    credentials = manager._creds.get_or_empty(account_id)
+    proxy_url = manager.proxy_url_from_proxies(manager.requests_proxies(credentials))
+    if voice_udp_requires_socks5(proxy_url):
+        raise RuntimeError(
+            "Discord voice needs a SOCKS5 proxy with UDP. "
+            "The current HTTP/VPN proxy cannot carry voice, so Discord kicks you immediately."
+        )
+
     # Leave any existing VoiceClient for this guild first.
     existing = channel.guild.voice_client if channel.guild is not None else None
     if existing is not None and existing.is_connected():
@@ -365,12 +454,14 @@ async def start_selfcord_voice_session(
                     )
 
     class BridgeVoiceConnectionState(VoiceConnectionState):
-        # Operator PCM bridge cannot participate in MLS/DAVE E2EE.
-        # Advertising DAVE leaves both directions silent until dave_session.ready
-        # (often never, from the browser mixer's point of view).
-        @property
-        def max_dave_protocol_version(self) -> int:
-            return 0
+        def _create_socket(self) -> None:
+            self.socket = create_discord_voice_udp_socket(proxy_url)
+            self._socket_reader.resume()
+            if proxy_url:
+                logger.info(
+                    "discord voice UDP via SOCKS5 account=%s",
+                    account_id[:8],
+                )
 
     class OmniVoiceClient(discord.VoiceClient):
         def create_connection_state(self) -> VoiceConnectionState:
