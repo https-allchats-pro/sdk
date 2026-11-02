@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
 import shutil
 import uuid
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import IO, TYPE_CHECKING, Any
 
 from google.protobuf.message import DecodeError
 from neonize.aioze.client import NewAClient
@@ -42,18 +44,80 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 SESSION_DB_NAME = "neonize.db"
+QR_CACHE_NAME = "qr.dataurl"
 
 
-def whatsapp_session_db(settings: Settings, account_id: str):
-    from pathlib import Path
-
-    return Path(settings.work_dir) / "whatsapp" / account_id / SESSION_DB_NAME
+def whatsapp_work_root(settings: Settings) -> Path:
+    return Path(settings.work_dir).expanduser().resolve() / "whatsapp"
 
 
-def ensure_whatsapp_session_db(settings: Settings, account_id: str):
+def whatsapp_session_dir(settings: Settings, account_id: str) -> Path:
+    return whatsapp_work_root(settings) / account_id
+
+
+def whatsapp_session_db(settings: Settings, account_id: str) -> Path:
+    return whatsapp_session_dir(settings, account_id) / SESSION_DB_NAME
+
+
+def whatsapp_qr_cache_path(settings: Settings, account_id: str) -> Path:
+    return whatsapp_session_dir(settings, account_id) / QR_CACHE_NAME
+
+
+def whatsapp_session_lock_path(settings: Settings, account_id: str) -> Path:
+    return whatsapp_work_root(settings) / f"{account_id}.lock"
+
+
+def ensure_whatsapp_session_db(settings: Settings, account_id: str) -> Path:
     db_path = whatsapp_session_db(settings, account_id)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    return db_path
+    return db_path.resolve()
+
+
+def write_whatsapp_qr_cache(settings: Settings, account_id: str, data_url: str) -> None:
+    path = whatsapp_qr_cache_path(settings, account_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(data_url or "", encoding="utf-8")
+    except OSError:
+        logger.debug("whatsapp qr cache write failed account=%s", account_id[:8], exc_info=True)
+
+
+def read_whatsapp_qr_cache(settings: Settings, account_id: str) -> str:
+    path = whatsapp_qr_cache_path(settings, account_id)
+    try:
+        if path.is_file():
+            return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        logger.debug("whatsapp qr cache read failed account=%s", account_id[:8], exc_info=True)
+    return ""
+
+
+def try_acquire_whatsapp_session_lock(settings: Settings, account_id: str) -> IO[str] | None:
+    lock_path = whatsapp_session_lock_path(settings, account_id)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(lock_path, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return handle
+    except BlockingIOError:
+        handle.close()
+        return None
+    except OSError:
+        handle.close()
+        return None
+
+
+def release_whatsapp_session_lock(handle: IO[str] | None) -> None:
+    if handle is None:
+        return
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        handle.close()
+    except OSError:
+        pass
 
 
 async def run_whatsapp_neonize_runtime(
@@ -67,6 +131,17 @@ async def run_whatsapp_neonize_runtime(
     credentials: dict[str, Any] | None = None,
 ) -> None:
     session_db = ensure_whatsapp_session_db(settings, account_id)
+    session_lock = try_acquire_whatsapp_session_lock(settings, account_id)
+    if session_lock is None:
+        # Another process already owns neonize.db. Surface its QR instead of
+        # opening a second SQLite handle (that yields disk I/O / no such file).
+        await _follow_peer_qr_session(
+            settings=settings,
+            account_id=account_id,
+            client_state=client_state,
+            manager=manager,
+        )
+        return
 
     # neonize Go layer is not safe for concurrent NewAClient/connect
     # ("fatal error: concurrent map writes"). Serialize bootstrap only.
@@ -77,6 +152,7 @@ async def run_whatsapp_neonize_runtime(
         manager.register_neonize_client(account_id, client)
     except Exception:
         manager.neonize_bootstrap_lock.release()
+        release_whatsapp_session_lock(session_lock)
         raise
 
     @client.qr
@@ -86,6 +162,7 @@ async def run_whatsapp_neonize_runtime(
             return
         runtime.qr_data_url = qr_bytes_to_data_url(data)
         runtime.state_instance = "starting"
+        write_whatsapp_qr_cache(settings, account_id, runtime.qr_data_url)
 
     @client.event(ConnectedEv)
     async def on_connected(_: NewAClient, __: ConnectedEv) -> None:
@@ -306,10 +383,31 @@ async def run_whatsapp_neonize_runtime(
             await client.disconnect()
         except Exception:
             logger.debug("whatsapp neonize disconnect failed account=%s", account_id[:8], exc_info=True)
+        release_whatsapp_session_lock(session_lock)
+
+
+async def _follow_peer_qr_session(
+    *,
+    settings: Settings,
+    account_id: str,
+    client_state: WhatsAppAccountClient,
+    manager: WhatsAppClientManager,
+) -> None:
+    manager.set_client_state(account_id, state_instance="starting", running=True)
+    cached = read_whatsapp_qr_cache(settings, account_id)
+    if cached:
+        client_state.qr_data_url = cached
+        client_state.state_instance = "starting"
+    while client_state.running:
+        cached = read_whatsapp_qr_cache(settings, account_id)
+        if cached and cached != client_state.qr_data_url:
+            client_state.qr_data_url = cached
+            client_state.state_instance = "starting"
+        await asyncio.sleep(0.5)
 
 
 def clear_session_dir(settings: Settings, account_id: str) -> None:
-    session_dir = whatsapp_session_db(settings, account_id).parent
+    session_dir = whatsapp_session_dir(settings, account_id)
     if session_dir.exists():
         shutil.rmtree(session_dir, ignore_errors=True)
     session_dir.mkdir(parents=True, exist_ok=True)

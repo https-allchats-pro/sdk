@@ -14,6 +14,7 @@ from allchats_sdk.providers.whatsapp.neonize_runtime import (
     clear_session_dir,
     ensure_whatsapp_session_db,
     neonize_client_is_ready,
+    read_whatsapp_qr_cache,
     revoke_neonize_message,
     run_whatsapp_neonize_runtime,
     send_neonize_message,
@@ -64,6 +65,7 @@ class WhatsAppClientManager:
         self._clients: dict[str, WhatsAppAccountClient] = {}
         self._neonize_clients: dict[str, NewAClient] = {}
         self._runtime_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._start_locks: dict[str, asyncio.Lock] = {}
         # neonize Go runtime races on concurrent NewAClient/connect (fatal: concurrent map writes).
         self._neonize_bootstrap_lock = asyncio.Lock()
 
@@ -210,8 +212,17 @@ class WhatsAppClientManager:
         task = self._runtime_tasks.get(account_id)
         return task is not None and not task.done()
 
+    def _start_lock(self, account_id: str) -> asyncio.Lock:
+        lock = self._start_locks.get(account_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._start_locks[account_id] = lock
+        return lock
+
     async def _reset_session_and_runtime(self, account_id: str) -> None:
         await self.stop_runtime(account_id)
+        # Let neonize close sqlite before unlink; otherwise CREATE TABLE hits ENOENT.
+        await asyncio.sleep(0.5)
         clear_session_dir(self._settings, account_id)
         ensure_whatsapp_session_db(self._settings, account_id)
 
@@ -221,13 +232,21 @@ class WhatsAppClientManager:
         *,
         refresh: bool = False,
     ) -> WhatsAppAccountClient:
-        credentials = self._creds.get_or_empty(account_id)
-        session_db = whatsapp_session_db(self._settings, account_id)
+        async with self._start_lock(account_id):
+            return await self._start_qr_locked(account_id, refresh=refresh)
+
+    async def _start_qr_locked(
+        self,
+        account_id: str,
+        *,
+        refresh: bool = False,
+    ) -> WhatsAppAccountClient:
         runtime_live = self._runtime_is_live(account_id)
 
-        # A live neonize process already owns cache/whatsapp/{id}/neonize.db.
-        # Deleting that folder mid-QR causes: "failed to upgrade database:
-        # disk I/O error: no such file or directory".
+        # Never rmtree neonize.db while any worker may still have it open.
+        # A live process, or another gunicorn worker, already owns the folder.
+        # Deleting it mid-QR causes: "failed to upgrade database:
+        # failed to create version table: disk I/O error: no such file or directory".
         if runtime_live and not refresh:
             client = self._clients.get(account_id)
             if client is not None and (client.qr_data_url or client.is_authorized):
@@ -236,16 +255,27 @@ class WhatsAppClientManager:
 
         if refresh:
             await self._reset_session_and_runtime(account_id)
-        elif not runtime_live and not whatsapp_authorized(credentials) and session_db.exists():
-            # Stale leftover from a previous failed pairing — safe to wipe only
-            # when nothing is currently connected to that directory.
-            await self._reset_session_and_runtime(account_id)
+        else:
+            cached = read_whatsapp_qr_cache(self._settings, account_id)
+            if cached and not runtime_live:
+                client = self.set_client_state(account_id, state_instance="starting", running=True)
+                client.qr_data_url = cached
+                client.error = ""
+                client = await self._ensure_runtime(account_id)
+                if client.qr_data_url or client.is_authorized:
+                    return client
+                return await self._wait_for_qr_or_auth(account_id)
 
         client = await self._ensure_runtime(account_id)
         try:
             return await self._wait_for_qr_or_auth(account_id)
         except ValidationError:
             if client.is_authorized:
+                return client
+            cached = read_whatsapp_qr_cache(self._settings, account_id)
+            if cached:
+                client.qr_data_url = cached
+                client.error = ""
                 return client
             raise
 
@@ -326,19 +356,23 @@ class WhatsAppClientManager:
                 asyncio.create_task(self.ensure_client(account_id, credentials))
             return "authorized"
 
+        if self._runtime_is_live(account_id):
+            client = self._clients.get(account_id)
+            if client is not None and client.is_authorized:
+                return "authorized"
+            if client is not None and client.qr_data_url:
+                return "starting"
+
         session_db = whatsapp_session_db(self._settings, account_id)
-        if session_db.exists():
-            try:
-                await self._ensure_runtime(account_id)
-                client = await self._wait_for_qr_or_auth(account_id, timeout_sec=15.0)
-                if client.is_authorized:
-                    return "authorized"
-                if client.qr_data_url:
-                    return "starting"
-            except ValidationError:
-                pass
-            except Exception as exc:
-                logger.debug("whatsapp session restore failed account=%s: %s", account_id[:8], exc)
+        if session_db.exists() or read_whatsapp_qr_cache(self._settings, account_id):
+            if stored_state == "authorized" or whatsapp_authorized(credentials):
+                try:
+                    await self._ensure_runtime(account_id)
+                except Exception as exc:
+                    logger.debug("whatsapp session restore failed account=%s: %s", account_id[:8], exc)
+                return stored_state or "authorized"
+            if read_whatsapp_qr_cache(self._settings, account_id):
+                return "starting"
 
         return stored_state or "notAuthorized"
 
