@@ -305,26 +305,16 @@ class WhatsAppClientManager:
     async def get_state(self, account_id: str, credentials: dict[str, Any]) -> str:
         stored_state = str(credentials.get("state_instance") or "").strip()
         if stored_state == "authorized" and whatsapp_authorized(credentials):
+            self.set_client_state(
+                account_id,
+                state_instance="authorized",
+                user_id=str(credentials.get("user_id") or ""),
+                running=True,
+            )
             neonize_client = self.neonize_client_for_account(account_id)
-            if neonize_client is not None and await neonize_client_is_ready(neonize_client):
-                self.set_client_state(
-                    account_id,
-                    state_instance="authorized",
-                    user_id=str(credentials.get("user_id") or ""),
-                    running=True,
-                )
-                return "authorized"
-
-            await self.ensure_client(account_id, credentials)
-            neonize_client = self.neonize_client_for_account(account_id)
-            if neonize_client is not None and await neonize_client_is_ready(neonize_client):
-                self.set_client_state(
-                    account_id,
-                    state_instance="authorized",
-                    user_id=str(credentials.get("user_id") or ""),
-                    running=True,
-                )
-                return "authorized"
+            if neonize_client is None or not await neonize_client_is_ready(neonize_client):
+                asyncio.create_task(self.ensure_client(account_id, credentials))
+            return "authorized"
 
         session_db = whatsapp_session_db(self._settings, account_id)
         if session_db.exists():
