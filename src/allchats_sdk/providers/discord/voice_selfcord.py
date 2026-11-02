@@ -21,7 +21,10 @@ from allchats_sdk.providers.discord.voice_udp import (
     SAMPLE_RATE,
     CHANNELS,
     DiscordVoiceCrypto,
+    audio_level_from_pcm,
+    audio_rtp_extension_payload,
     mono_pcm_to_stereo,
+    rtp_header_with_extension,
     stereo_pcm_to_mono,
     _is_silence_pcm,
 )
@@ -43,24 +46,87 @@ def voice_udp_requires_socks5(proxy_url: str | None) -> bool:
     return bool(scheme) and scheme not in {"socks5", "socks5h"}
 
 
+def is_discord_voice_ws_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host.endswith(".discord.media")
+
+
+def install_direct_discord_voice_websocket(http: Any) -> None:
+    """Send later voice websockets direct, leaving the gateway on the proxy.
+
+    HTTP/SOCKS4 carry the voice websocket but not UDP. Discord then sees two
+    IPs on one voice session and disconnects. SOCKS5 is left proxied so UDP
+    ASSOCIATE and the voice websocket share the proxy exit.
+    """
+    if getattr(http, "_allchats_voice_ws_direct", False):
+        return
+    original = http.ws_connect
+
+    async def ws_connect(url: str, **kwargs: Any):
+        if is_discord_voice_ws_url(url):
+            kwargs["proxy"] = None
+            kwargs["proxy_auth"] = None
+        return await original(url, **kwargs)
+
+    http.ws_connect = ws_connect
+    http._allchats_voice_ws_direct = True
+
+
+def install_discord_rtp_extensions(voice_client: Any) -> None:
+    """Put the audio-level RTP extension inside outgoing AEAD payloads.
+
+    discord.py-self 2.1 sends a bare Opus packet. Current Discord clients put
+    a one-byte header extension in the encrypted payload and ignore audio that
+    lacks it, while still showing the speaking ring from the voice websocket.
+    """
+    if getattr(voice_client, "_allchats_rtp_ext", False):
+        return
+
+    def _get_voice_packet(data: bytes, *_args: Any, **_kwargs: Any) -> bytes:
+        conn = voice_client._connection
+        packet = data
+        session = getattr(conn, "dave_session", None)
+        if session is not None and bool(getattr(conn, "can_encrypt", False)):
+            packet = session.encrypt_opus(data)
+        header = bytearray(12)
+        header[0] = 0x80
+        header[1] = 0x78
+        struct.pack_into(">H", header, 2, voice_client.sequence)
+        struct.pack_into(">I", header, 4, voice_client.timestamp)
+        struct.pack_into(">I", header, 8, voice_client.ssrc)
+        mode = str(getattr(voice_client, "mode", "") or "")
+        if mode.startswith("aead_"):
+            level = int(getattr(voice_client, "_allchats_audio_level", 127))
+            speaking = 1 if getattr(voice_client, "_allchats_speaking", False) else 0
+            extension = audio_rtp_extension_payload(speaking, audio_level=level)
+            header_bytes = rtp_header_with_extension(bytes(header), extension)
+            payload = extension + packet
+        else:
+            header_bytes = bytes(header)
+            payload = packet
+        encrypt_packet = getattr(voice_client, "_encrypt_" + mode)
+        return encrypt_packet(header_bytes, payload)
+
+    voice_client._get_voice_packet = _get_voice_packet
+    voice_client._allchats_rtp_ext = True
+
+
+def _plain_udp_socket() -> socket.socket:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setblocking(False)
+    return sock
+
+
 def create_discord_voice_udp_socket(proxy_url: str | None) -> socket.socket:
     """UDP socket for Discord voice.
 
-    Gateway is often SOCKS5/HTTP proxied while voice UDP went out the VPS IP.
-    Discord then sees two different IPs and force-disconnects (join/leave loop).
-    SOCKS5 UDP ASSOCIATE keeps voice on the same exit as the gateway.
+    SOCKS5 UDP ASSOCIATE keeps voice on the same exit as the proxied voice
+    websocket. HTTP and SOCKS4 cannot carry UDP, so the socket stays direct
+    and the voice websocket is opened direct as well.
     """
-    if not proxy_url:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setblocking(False)
-        return sock
-
     scheme = voice_udp_proxy_scheme(proxy_url)
     if scheme not in {"socks5", "socks5h"}:
-        raise RuntimeError(
-            "Discord voice needs a SOCKS5 proxy with UDP. "
-            f"{scheme or 'HTTP'} VPN/proxy cannot carry voice UDP, so Discord kicks immediately."
-        )
+        return _plain_udp_socket()
 
     parsed = urlparse(proxy_url)
     host = parsed.hostname
@@ -166,6 +232,8 @@ class DiscordSelfcordVoiceSession:
         except Exception as exc:
             raise RuntimeError(f"discord opus encoder unavailable: {exc}") from exc
 
+        install_discord_rtp_extensions(vc)
+
         bridge = get_or_create_bridge(self.account_id, self.manager)
         bridge.bind_transport(self)  # type: ignore[arg-type]
         self.manager.set_voice_transport(self.account_id, self)
@@ -268,18 +336,45 @@ class DiscordSelfcordVoiceSession:
         if session is None or not getattr(session, "ready", False):
             return None
         user_id_raw = self.manager.resolve_voice_ssrc(self.account_id, int(ssrc))
-        if not user_id_raw.isdigit():
+        user_ids: list[int] = []
+        if str(user_id_raw).isdigit():
+            user_ids.append(int(user_id_raw))
+        else:
+            try:
+                for item in session.get_user_ids() or []:
+                    text = str(item or "").strip()
+                    if text.isdigit():
+                        user_ids.append(int(text))
+            except Exception:
+                return None
+        if not user_ids:
             return None
         try:
             import davey
 
-            return bytes(session.decrypt(int(user_id_raw), davey.MediaType.audio, opus_packet))
+            last_error: Exception | None = None
+            for user_id in user_ids:
+                try:
+                    return bytes(session.decrypt(user_id, davey.MediaType.audio, opus_packet))
+                except Exception as exc:
+                    last_error = exc
+            for user_id in user_ids:
+                try:
+                    if session.can_passthrough(user_id):
+                        return opus_packet
+                except Exception:
+                    pass
+            if last_error is not None and not getattr(self, "_dave_rx_logged", False):
+                self._dave_rx_logged = True
+                logger.info(
+                    "discord dave decrypt failed account=%s ssrc=%s users=%s err=%s",
+                    self.account_id[:8],
+                    ssrc,
+                    len(user_ids),
+                    type(last_error).__name__,
+                )
+            return None
         except Exception:
-            try:
-                if session.can_passthrough(int(user_id_raw)):
-                    return opus_packet
-            except Exception:
-                pass
             return None
 
     def _decode_opus(self, ssrc: int, opus_packet: bytes) -> bytes:
@@ -376,7 +471,10 @@ class DiscordSelfcordVoiceSession:
         if len(mono_pcm) < MONO_FRAME_BYTES:
             mono_pcm = mono_pcm + (b"\x00" * (MONO_FRAME_BYTES - len(mono_pcm)))
         stereo = mono_pcm_to_stereo(mono_pcm[:MONO_FRAME_BYTES])
-        # Library encodes Opus + DAVE + RTP transport encryption.
+        vc._allchats_audio_level = audio_level_from_pcm(stereo)
+        vc._allchats_speaking = speaking
+        # Library encodes Opus. Our packet hook adds the RTP extension, then
+        # DAVE and transport encryption.
         vc.send_audio_packet(stereo, encode=True)
 
 
@@ -402,9 +500,10 @@ async def start_selfcord_voice_session(
     credentials = manager._creds.get_or_empty(account_id)
     proxy_url = manager.proxy_url_from_proxies(manager.requests_proxies(credentials))
     if voice_udp_requires_socks5(proxy_url):
-        raise RuntimeError(
-            "Discord voice needs a SOCKS5 proxy with UDP. "
-            "The current HTTP/VPN proxy cannot carry voice, so Discord kicks you immediately."
+        install_direct_discord_voice_websocket(library_client.http)
+        logger.info(
+            "discord voice bypasses HTTP proxy account=%s",
+            account_id[:8],
         )
 
     # Leave any existing VoiceClient for this guild first.
@@ -457,13 +556,36 @@ async def start_selfcord_voice_session(
         def _create_socket(self) -> None:
             self.socket = create_discord_voice_udp_socket(proxy_url)
             self._socket_reader.resume()
-            if proxy_url:
+            scheme = voice_udp_proxy_scheme(proxy_url)
+            if scheme in {"socks5", "socks5h"}:
                 logger.info(
                     "discord voice UDP via SOCKS5 account=%s",
                     account_id[:8],
                 )
+            elif proxy_url:
+                logger.info(
+                    "discord voice UDP direct account=%s",
+                    account_id[:8],
+                )
 
     class OmniVoiceClient(discord.VoiceClient):
+        supported_modes = (
+            "aead_aes256_gcm_rtpsize",
+            "aead_xchacha20_poly1305_rtpsize",
+            "xsalsa20_poly1305_lite",
+            "xsalsa20_poly1305_suffix",
+            "xsalsa20_poly1305",
+        )
+
+        def _encrypt_aead_aes256_gcm_rtpsize(self, header: bytes, data: bytes) -> bytes:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+            nonce_suffix = struct.pack(">I", self._incr_nonce)
+            self.checked_add("_incr_nonce", 1, 4294967295)
+            nonce = nonce_suffix + (b"\x00" * 8)
+            encrypted = AESGCM(bytes(self.secret_key)).encrypt(nonce, bytes(data), bytes(header))
+            return bytes(header) + encrypted + nonce_suffix
+
         def create_connection_state(self) -> VoiceConnectionState:
             return BridgeVoiceConnectionState(self, hook=voice_ws_hook)
 

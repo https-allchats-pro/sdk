@@ -3,8 +3,10 @@ from __future__ import annotations
 import array
 import asyncio
 import logging
+import math
 import socket
 import struct
+import time
 from typing import Any, Callable, Awaitable
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,64 @@ PREFERRED_MODES = (
 
 # Peak absolute sample below this counts as silence (s16le).
 _SILENCE_PEAK = 180
+RTP_ONE_BYTE_EXTENSION_PROFILE = b"\xbe\xde"
+RTP_AUDIO_LEVEL_SILENCE = 127
+
+
+def audio_level_from_pcm(data: bytes) -> int:
+    sample_bytes = len(data) & ~1
+    if sample_bytes == 0:
+        return RTP_AUDIO_LEVEL_SILENCE
+    square_sum = 0
+    sample_count = 0
+    for (sample,) in struct.iter_unpack("<h", data[:sample_bytes]):
+        square_sum += sample * sample
+        sample_count += 1
+    if square_sum == 0 or sample_count == 0:
+        return RTP_AUDIO_LEVEL_SILENCE
+    rms = math.sqrt(square_sum / sample_count)
+    ratio = min(rms / 32767.0, 1.0)
+    if ratio <= 0:
+        return RTP_AUDIO_LEVEL_SILENCE
+    return min(RTP_AUDIO_LEVEL_SILENCE, max(0, round(-20.0 * math.log10(ratio))))
+
+
+def audio_rtp_extension_payload(speaking: int, *, audio_level: int = RTP_AUDIO_LEVEL_SILENCE) -> bytes:
+    """One-byte RTP extensions official Discord clients put inside the AEAD payload."""
+    level = min(RTP_AUDIO_LEVEL_SILENCE, max(0, int(audio_level)))
+    voice_activity = 0x80 if speaking else 0
+    speaking_value = 0
+    if speaking & 4:
+        speaking_value |= 0b001
+    if speaking & 1:
+        speaking_value |= 0b010
+    if speaking & 2:
+        speaking_value |= 0b100
+    extensions = (
+        (1, bytes((voice_activity | level,))),
+        (3, (int((time.time() % 64) * (1 << 18)) & 0xFFFFFF).to_bytes(3, "big")),
+        (9, bytes((speaking_value,))),
+        (10, b"audio"),
+    )
+    payload = bytearray()
+    for extension_id, blob in extensions:
+        payload.append((extension_id << 4) | (len(blob) - 1))
+        payload.extend(blob)
+    padding = (-len(payload)) % 4
+    if padding:
+        payload.extend(b"\x00" * padding)
+    return bytes(payload)
+
+
+def rtp_header_with_extension(header: bytes, extension_payload: bytes) -> bytes:
+    header_buffer = bytearray(header[:12])
+    if not extension_payload:
+        header_buffer[0] &= ~0x10
+        return bytes(header_buffer)
+    header_buffer[0] |= 0x10
+    header_buffer.extend(RTP_ONE_BYTE_EXTENSION_PROFILE)
+    header_buffer.extend(struct.pack(">H", len(extension_payload) // 4))
+    return bytes(header_buffer)
 
 
 def _is_silence_pcm(mono: bytes) -> bool:
@@ -143,13 +203,11 @@ class DiscordVoiceCrypto:
     def decrypt(self, packet: bytes) -> bytes | None:
         if len(packet) < 12 + 16 + 4:
             return None
-        # RTP header may include extension.
-        header_size = 12
-        if packet[0] & 0x10:
-            if len(packet) < 16:
-                return None
-            ext_len = struct.unpack(">H", packet[14:16])[0]
-            header_size = 16 + ext_len * 4
+        # AEAD AAD is the 12-byte RTP header, plus 4 bytes of extension
+        # profile/length when the X bit is set. The extension payload itself
+        # is inside the ciphertext. Counting it as cleartext header makes
+        # authentication fail, so every remote packet is dropped.
+        header_size = 16 if packet[0] & 0x10 else 12
         if len(packet) < header_size + 16 + 4:
             return None
         header = packet[:header_size]
@@ -159,11 +217,21 @@ class DiscordVoiceCrypto:
             if self.mode == "aead_aes256_gcm_rtpsize":
                 assert self._aesgcm is not None
                 nonce = nonce_suffix + (b"\x00" * 8)
-                return self._aesgcm.decrypt(nonce, body, header)
-            nonce = nonce_suffix + (b"\x00" * 20)
-            return self._decrypt(body, header, nonce, self.secret_key)
+                plain = self._aesgcm.decrypt(nonce, body, header)
+            else:
+                nonce = nonce_suffix + (b"\x00" * 20)
+                plain = self._decrypt(body, header, nonce, self.secret_key)
         except Exception:
             return None
+        if (
+            header_size == 16
+            and packet[12:14] == RTP_ONE_BYTE_EXTENSION_PROFILE
+            and len(packet) >= 16
+        ):
+            ext_bytes = struct.unpack(">H", packet[14:16])[0] * 4
+            if 0 <= ext_bytes <= len(plain):
+                plain = plain[ext_bytes:]
+        return plain
 
 
 class DiscordVoiceUdpTransport:
