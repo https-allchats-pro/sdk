@@ -155,6 +155,11 @@ def _register_message_handlers(
         )
         if from_name:
             metadata["from_name"] = from_name
+        from allchats_sdk.providers.telegram.forwards import extract_telegram_forward_meta
+
+        forward_meta = extract_telegram_forward_meta(event.message)
+        if forward_meta:
+            metadata["forward"] = forward_meta
 
         await event_sink.on_incoming(
             IncomingMessageEvent(
@@ -236,6 +241,11 @@ def _register_message_handlers(
             metadata["access_hash"] = chat_context["access_hash"]
         if chat_context.get("avatar_url"):
             metadata["avatar_url"] = chat_context["avatar_url"]
+        from allchats_sdk.providers.telegram.forwards import extract_telegram_forward_meta
+
+        forward_meta = extract_telegram_forward_meta(event.message)
+        if forward_meta:
+            metadata["forward"] = forward_meta
 
         await event_sink.on_outgoing(
             OutgoingMessageEvent(
