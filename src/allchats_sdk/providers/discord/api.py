@@ -404,7 +404,7 @@ def _exchange_remote_auth_ticket_sync(
             )
         except DiscordApiError as exc:
             last_error = exc
-            if exc.status_code in {400, 403} and attempt_proxies is None and proxies:
+            if attempt_proxies is None and proxies:
                 logger.warning(
                     "discord remote-auth ticket exchange failed direct (%s); retrying proxy",
                     exc,
