@@ -72,6 +72,66 @@ def install_direct_discord_voice_websocket(http: Any) -> None:
     http._allchats_voice_ws_direct = True
 
 
+def install_discord_voice_protocol_v9() -> None:
+    """Speak voice protocol v9 and name the channel in IDENTIFY.
+
+    discord.py-self 2.1 opens ``/?v=8`` without channel_id. Discord still
+    reports dave_protocol_version=1, but the MLS handshake never finishes,
+    so every audio frame is dropped while the speaking ring still lights.
+    """
+    from discord.gateway import DiscordVoiceWebSocket
+
+    if getattr(DiscordVoiceWebSocket, "_allchats_voice_v9", False):
+        return
+
+    async def identify(self: Any) -> None:
+        state = self._connection
+        channel = state.voice_client.channel
+        payload = {
+            "op": self.IDENTIFY,
+            "d": {
+                "server_id": str(state.server_id),
+                "channel_id": str(getattr(channel, "id", "") or ""),
+                "user_id": str(state.user.id),
+                "session_id": state.session_id,
+                "token": state.token,
+                "video": False,
+                "streams": [],
+                "max_dave_protocol_version": state.max_dave_protocol_version,
+            },
+        }
+        await self.send_as_json(payload)
+
+    @classmethod
+    async def from_connection_state(
+        cls: Any,
+        state: Any,
+        *,
+        resume: bool = False,
+        hook: Any = None,
+        seq_ack: int = -1,
+    ) -> Any:
+        gateway = f"wss://{state.endpoint}/?v=9"
+        client = state.voice_client
+        http = client._state.http
+        socket_ = await http.ws_connect(gateway)
+        ws = cls(socket_, loop=client.loop, hook=hook)
+        ws.gateway = gateway
+        ws.seq_ack = seq_ack
+        ws._connection = state
+        ws._max_heartbeat_timeout = 60.0
+        ws.thread_id = __import__("threading").get_ident()
+        if resume:
+            await ws.resume()
+        else:
+            await ws.identify()
+        return ws
+
+    DiscordVoiceWebSocket.identify = identify
+    DiscordVoiceWebSocket.from_connection_state = from_connection_state
+    DiscordVoiceWebSocket._allchats_voice_v9 = True
+
+
 def install_discord_rtp_extensions(voice_client: Any) -> None:
     """Put the audio-level RTP extension inside outgoing AEAD payloads.
 
@@ -146,6 +206,27 @@ def create_discord_voice_udp_socket(proxy_url: str | None) -> socket.socket:
         def sendall(self, data: bytes, flags: int = 0) -> None:
             self.send(data, flags)
 
+        def recvfrom(self, bufsize: int, flags: int = 0):
+            # PySocks drops any UDP reply whose source port is not the port we
+            # connected to. Discord sends RTP from another port, so every
+            # audio packet was discarded while IP discovery still succeeded.
+            from io import BytesIO
+
+            if not self._proxyconn:
+                self.bind(("", 0))
+            raw = socket.socket.recv(self, bufsize + 1024, flags)
+            buf = BytesIO(raw)
+            buf.seek(2)
+            frag = buf.read(1)
+            if frag and frag[0]:
+                raise OSError("Received UDP packet fragment")
+            fromhost, fromport = self._read_SOCKS5_address(buf)
+            return (buf.read(bufsize), (fromhost, fromport))
+
+        def recv(self, bufsize: int, flags: int = 0) -> bytes:
+            data, _addr = self.recvfrom(bufsize, flags)
+            return data
+
     sock = SocksVoiceUdpSocket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.set_proxy(socks.SOCKS5, host, port, True, username, password)
     sock.settimeout(15)
@@ -212,6 +293,13 @@ class DiscordSelfcordVoiceSession:
             await asyncio.sleep(0.1)
 
         conn = vc._connection
+        dave_ready = bool(getattr(conn, "can_encrypt", False))
+        if int(getattr(conn, "dave_protocol_version", 0) or 0) > 0 and not dave_ready:
+            logger.warning(
+                "discord voice DAVE not ready account=%s status=%s",
+                self.account_id[:8],
+                getattr(getattr(conn, "dave_session", None), "status", None),
+            )
         self._own_ssrc = int(getattr(conn, "ssrc", 0) or 0)
         from discord.utils import MISSING
 
@@ -490,6 +578,8 @@ async def start_selfcord_voice_session(
     library_client = manager.discord_library_client(account_id)
     if library_client is None:
         raise RuntimeError("discord client is not connected")
+
+    install_discord_voice_protocol_v9()
 
     channel = library_client.get_channel(int(channel_id))
     if channel is None:

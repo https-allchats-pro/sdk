@@ -221,6 +221,16 @@ def get_call_protocol() -> PhoneCallProtocol:
     return _CALL_PROTOCOL
 
 
+def _bind_ntgcalls(ntgcalls: Any, current: str, legacy: str) -> Any:
+    """ntgcalls 3 renamed signaling to send_signaling_data / on_signaling_data."""
+    method = getattr(ntgcalls, current, None)
+    if method is None:
+        method = getattr(ntgcalls, legacy, None)
+    if method is None:
+        raise AttributeError(f"ntgcalls has neither {current} nor {legacy}")
+    return method
+
+
 def _call_library_versions(phone_call: PhoneCall) -> list[str]:
     # connect_p2p expects OUR supported library versions (ntgcalls), not remote.
     local = list(get_call_protocol().library_versions)
@@ -401,7 +411,14 @@ class TelegramCallCoordinator:
 
         if self._ntgcalls is None:
             self._ntgcalls = NTgCalls()
-            self._register_ntgcalls_callbacks()
+        if not self._ntgcalls_callbacks_registered:
+            try:
+                self._register_ntgcalls_callbacks()
+            except Exception:
+                logger.exception("failed to register ntgcalls callbacks")
+                self._ntgcalls = None
+                self._ntgcalls_callbacks_registered = False
+                raise
         return self._ntgcalls
 
     def _register_ntgcalls_callbacks(self) -> None:
@@ -464,7 +481,7 @@ class TelegramCallCoordinator:
                 getattr(remote_source, "ssrc", None),
             )
 
-        self._ntgcalls.on_signaling(_on_signaling)
+        _bind_ntgcalls(self._ntgcalls, "on_signaling_data", "on_signaling")(_on_signaling)
         self._ntgcalls.on_connection_change(_on_connection_change)
         self._ntgcalls.on_frames(_on_frames)
         self._ntgcalls.on_remote_source_change(_on_remote_source_change)
@@ -1838,7 +1855,10 @@ class TelegramCallCoordinator:
             return
 
         try:
-            ntgcalls.send_signaling(session.participant_id, data)
+            _bind_ntgcalls(ntgcalls, "send_signaling_data", "send_signaling")(
+                session.participant_id,
+                data,
+            )
             logger.debug(
                 "telegram call signaling in account=%s call_id=%s bytes=%s",
                 account_id[:8],
