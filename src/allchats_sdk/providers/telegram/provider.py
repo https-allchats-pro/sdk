@@ -355,6 +355,19 @@ class TelegramProvider:
             active = self.find_active_qr(account_id)
             if active is not None:
                 return active
+            qr_task = self._qr_tasks.get(account_id)
+            client = self._clients.get(account_id)
+            if qr_task is not None and not qr_task.done() and client is not None:
+                proxy = resolve_telegram_proxy(settings=self._settings, credentials=credentials)
+                deadline = time.time() + telegram_qr_wait_timeout(proxy)
+                while time.time() < deadline:
+                    if client.qr_link and client.track_id:
+                        return client
+                    if client.state_instance == "authorized" or client.is_authorized:
+                        return client
+                    if client.state_instance == "error":
+                        raise MessengerClientUnavailableError(client.error or "qr failed")
+                    await asyncio.sleep(0.25)
 
         await self.stop_session(account_id)
         await self.stop_qr(account_id)

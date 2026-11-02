@@ -364,9 +364,17 @@ async def start_selfcord_voice_session(
                         ssrc=int(audio_ssrc),
                     )
 
+    class BridgeVoiceConnectionState(VoiceConnectionState):
+        # Operator PCM bridge cannot participate in MLS/DAVE E2EE.
+        # Advertising DAVE leaves both directions silent until dave_session.ready
+        # (often never, from the browser mixer's point of view).
+        @property
+        def max_dave_protocol_version(self) -> int:
+            return 0
+
     class OmniVoiceClient(discord.VoiceClient):
         def create_connection_state(self) -> VoiceConnectionState:
-            return VoiceConnectionState(self, hook=voice_ws_hook)
+            return BridgeVoiceConnectionState(self, hook=voice_ws_hook)
 
     voice_client = await channel.connect(
         cls=OmniVoiceClient,

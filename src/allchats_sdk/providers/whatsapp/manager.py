@@ -12,6 +12,7 @@ from neonize.aioze.client import NewAClient
 from allchats_sdk.providers.whatsapp.client import normalize_recipient, phone_to_chat_id
 from allchats_sdk.providers.whatsapp.neonize_runtime import (
     clear_session_dir,
+    ensure_whatsapp_session_db,
     neonize_client_is_ready,
     revoke_neonize_message,
     run_whatsapp_neonize_runtime,
@@ -205,6 +206,15 @@ class WhatsAppClientManager:
             }
         return {"type": "error", "message": client.error or "QR code is not available"}
 
+    def _runtime_is_live(self, account_id: str) -> bool:
+        task = self._runtime_tasks.get(account_id)
+        return task is not None and not task.done()
+
+    async def _reset_session_and_runtime(self, account_id: str) -> None:
+        await self.stop_runtime(account_id)
+        clear_session_dir(self._settings, account_id)
+        ensure_whatsapp_session_db(self._settings, account_id)
+
     async def start_qr(
         self,
         account_id: str,
@@ -213,31 +223,31 @@ class WhatsAppClientManager:
     ) -> WhatsAppAccountClient:
         credentials = self._creds.get_or_empty(account_id)
         session_db = whatsapp_session_db(self._settings, account_id)
+        runtime_live = self._runtime_is_live(account_id)
+
+        # A live neonize process already owns cache/whatsapp/{id}/neonize.db.
+        # Deleting that folder mid-QR causes: "failed to upgrade database:
+        # disk I/O error: no such file or directory".
+        if runtime_live and not refresh:
+            client = self._clients.get(account_id)
+            if client is not None and (client.qr_data_url or client.is_authorized):
+                return client
+            return await self._wait_for_qr_or_auth(account_id)
 
         if refresh:
-            await self.stop_runtime(account_id)
-            clear_session_dir(self._settings, account_id)
-        elif not whatsapp_authorized(credentials) and session_db.exists():
-            await self.stop_runtime(account_id)
-            clear_session_dir(self._settings, account_id)
-
-        client = self._clients.get(account_id)
-        task = self._runtime_tasks.get(account_id)
-        if not refresh and task is not None and not task.done() and client is not None:
-            if client.qr_data_url or client.is_authorized:
-                return client
+            await self._reset_session_and_runtime(account_id)
+        elif not runtime_live and not whatsapp_authorized(credentials) and session_db.exists():
+            # Stale leftover from a previous failed pairing — safe to wipe only
+            # when nothing is currently connected to that directory.
+            await self._reset_session_and_runtime(account_id)
 
         client = await self._ensure_runtime(account_id)
         try:
-            client = await self._wait_for_qr_or_auth(account_id)
+            return await self._wait_for_qr_or_auth(account_id)
         except ValidationError:
             if client.is_authorized:
                 return client
             raise
-
-        if client.is_authorized:
-            return client
-        return client
 
     async def stop_runtime(self, account_id: str) -> None:
         task = self._runtime_tasks.pop(account_id, None)

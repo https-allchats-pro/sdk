@@ -468,20 +468,41 @@ class DiscordClientManager:
         client.running = running
         return client
 
+    async def _wait_for_qr_client(
+        self,
+        account_id: str,
+        client: DiscordAccountClient,
+        *,
+        timeout_sec: float = 30.0,
+    ) -> DiscordAccountClient:
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            if client.auth_url:
+                return client
+            if client.state_instance == "authorized" or client.is_authorized:
+                return client
+            if client.error and client.state_instance == "notAuthorized":
+                raise ValidationError(client.error or "discord qr auth failed")
+            await asyncio.sleep(0.25)
+        if client.error:
+            raise ValidationError(client.error)
+        raise ValidationError("qr not available: discord did not respond in time")
+
     async def start_qr(
         self,
         account_id: str,
         *,
         refresh: bool = False,
     ) -> DiscordAccountClient:
+        if not refresh and self.is_qr_auth_active(account_id):
+            client = self._clients.get(account_id)
+            if client is not None:
+                if client.auth_url or client.is_authorized:
+                    return client
+                return await self._wait_for_qr_client(account_id, client)
+
         if refresh:
             await self.stop_qr(account_id)
-
-        if not refresh:
-            task = self._qr_tasks.get(account_id)
-            client = self._clients.get(account_id)
-            if task is not None and not task.done() and client is not None and client.auth_url:
-                return client
 
         await self.cancel_login_auth(account_id)
         client = self.set_client_state(account_id, state_instance="starting", running=True)
@@ -503,20 +524,7 @@ class DiscordClientManager:
         )
         self._qr_tasks[account_id] = task
         task.add_done_callback(lambda _task: self._qr_tasks.pop(account_id, None))
-
-        deadline = time.time() + 30.0
-        while time.time() < deadline:
-            if client.auth_url:
-                return client
-            if client.state_instance == "authorized" or client.is_authorized:
-                return client
-            if client.error and client.state_instance == "notAuthorized":
-                raise ValidationError(client.error or "discord qr auth failed")
-            await asyncio.sleep(0.25)
-
-        if client.error:
-            raise ValidationError(client.error)
-        raise ValidationError("qr not available: discord did not respond in time")
+        return await self._wait_for_qr_client(account_id, client)
 
     @staticmethod
     def _qr_data_url(qr_link: str) -> str:

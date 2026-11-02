@@ -384,14 +384,21 @@ class VKProvider:
         refresh: bool = False,
     ) -> VkAccountClient:
         _ = credentials  # conceptual API parity with TelegramProvider
+        if not refresh and self.is_qr_auth_active(account_id):
+            client = self._clients.get(account_id)
+            if client is not None:
+                if client.auth_url or client.is_authorized:
+                    return client
+                deadline = time.time() + 30.0
+                while time.time() < deadline:
+                    if client.auth_url or client.is_authorized:
+                        return client
+                    if client.error and client.state_instance == "notAuthorized":
+                        raise ValidationError(client.error or "vk qr auth failed")
+                    await asyncio.sleep(0.25)
+
         if refresh:
             await self.stop_qr(account_id)
-
-        if not refresh:
-            task = self._qr_tasks.get(account_id)
-            client = self._clients.get(account_id)
-            if task is not None and not task.done() and client is not None and client.auth_url:
-                return client
 
         await self.cancel_login_auth(account_id)
 

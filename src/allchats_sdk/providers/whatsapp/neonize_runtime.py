@@ -312,6 +312,7 @@ def clear_session_dir(settings: Settings, account_id: str) -> None:
     session_dir = whatsapp_session_db(settings, account_id).parent
     if session_dir.exists():
         shutil.rmtree(session_dir, ignore_errors=True)
+    session_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _neonize_go_client(client: NewAClient):
