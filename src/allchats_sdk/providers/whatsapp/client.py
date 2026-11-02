@@ -38,23 +38,104 @@ def qr_bytes_to_data_url(data: bytes) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
+_WRAPPER_MESSAGE_FIELDS = (
+    "deviceSentMessage",
+    "viewOnceMessage",
+    "viewOnceMessageV2",
+    "viewOnceMessageV2Extension",
+    "ephemeralMessage",
+    "documentWithCaptionMessage",
+    "editedMessage",
+)
+
+
+def proto_field_present(message: Any, field: str) -> bool:
+    """True when a protobuf field is actually set.
+
+    Nested protobuf messages are never ``None`` — ``getattr(msg, "audioMessage")``
+    returns an empty instance. Treating that as present marks every text
+    message as media / device-sent and drops it.
+    """
+    if message is None or not field:
+        return False
+    has_field = getattr(message, "HasField", None)
+    if callable(has_field):
+        try:
+            return bool(has_field(field))
+        except Exception:
+            pass
+    list_fields = getattr(message, "ListFields", None)
+    if callable(list_fields):
+        try:
+            return any(getattr(descriptor, "name", "") == field for descriptor, _ in list_fields())
+        except Exception:
+            pass
+    value = getattr(message, field, None)
+    if value is None:
+        return False
+    if isinstance(value, (str, bytes, bytearray, int, float, bool)):
+        return bool(value)
+    byte_size = getattr(value, "ByteSize", None)
+    if callable(byte_size):
+        try:
+            return int(byte_size()) > 0
+        except Exception:
+            return False
+    return True
+
+
 def unwrap_whatsapp_message(message: Any) -> Any:
     if message is None:
         return message
 
-    device_sent = getattr(message, "deviceSentMessage", None)
-    if device_sent is not None:
-        inner = getattr(device_sent, "message", None)
-        if inner is not None:
-            return inner
-
-    return message
+    current = message
+    for _ in range(6):
+        inner = None
+        for field in _WRAPPER_MESSAGE_FIELDS:
+            if not proto_field_present(current, field):
+                continue
+            wrapper = getattr(current, field, None)
+            nested = getattr(wrapper, "message", None) if wrapper is not None else None
+            if nested is not None:
+                inner = nested
+                break
+        if inner is None:
+            return current
+        current = inner
+    return current
 
 
 def is_whatsapp_outgoing_message(source: Any, message: Any | None = None) -> bool:
     if bool(getattr(source, "IsFromMe", False)):
         return True
-    return message is not None and getattr(message, "deviceSentMessage", None) is not None
+    return message is not None and proto_field_present(message, "deviceSentMessage")
+
+
+_HISTORY_SYNC_WITH_MESSAGES = {0, 2, 3, 6}
+
+
+def history_sync_contains_messages(sync_type: Any) -> bool:
+    raw = str(sync_type or "").upper()
+    if any(token in raw for token in ("STATUS", "PUSH_NAME", "NON_BLOCKING")):
+        return False
+    if any(token in raw for token in ("BOOTSTRAP", "FULL", "RECENT", "ON_DEMAND")):
+        return True
+    try:
+        return int(sync_type) in _HISTORY_SYNC_WITH_MESSAGES
+    except (TypeError, ValueError):
+        return True
+
+
+def is_skippable_whatsapp_chat(external_chat_id: str) -> bool:
+    raw = str(external_chat_id or "").strip().lower()
+    if not raw:
+        return True
+    return (
+        raw.startswith("status@")
+        or raw.endswith("@broadcast")
+        or raw.endswith("@newsletter")
+        or raw.endswith("@call")
+    )
 
 
 def _jid_from_destination_string(destination: str) -> Any | None:

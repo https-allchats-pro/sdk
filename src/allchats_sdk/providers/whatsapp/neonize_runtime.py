@@ -10,7 +10,7 @@ from typing import IO, TYPE_CHECKING, Any
 
 from google.protobuf.message import DecodeError
 from neonize.aioze.client import NewAClient
-from neonize.aioze.events import ConnectedEv, LoggedOutEv, MessageEv, ReceiptEv
+from neonize.aioze.events import ConnectedEv, HistorySyncEv, LoggedOutEv, MessageEv, ReceiptEv, StreamReplacedEv
 from neonize.exc import SendMessageError
 from neonize.proto.Neonize_pb2 import Receipt as ReceiptProto
 from neonize.proto.Neonize_pb2 import SendMessageReturnFunction
@@ -21,11 +21,14 @@ from neonize.utils.jid import build_jid, jid_is_lid
 from allchats_sdk.providers.whatsapp.client import (
     external_chat_id_to_jid,
     extract_message_text,
+    history_sync_contains_messages,
+    is_skippable_whatsapp_chat,
     jid_to_external_chat_id,
     lookup_lid_for_pn_in_session_db,
     normalize_recipient,
     parse_message_timestamp,
     persist_lid_mapping_from_source,
+    proto_field_present,
     qr_bytes_to_data_url,
     is_whatsapp_outgoing_message,
     resolve_message_chat_jid,
@@ -107,6 +110,197 @@ def try_acquire_whatsapp_session_lock(settings: Settings, account_id: str) -> IO
         return None
 
 
+async def _ingest_whatsapp_message(
+    *,
+    account_id: str,
+    client_state: WhatsAppAccountClient,
+    event_sink: EventSink,
+    incoming_handler: IncomingMessageHandler | None,
+    neonize_client: NewAClient,
+    message_proto: Any,
+    external_chat_id: str,
+    title: str,
+    is_group: bool,
+    is_from_me: bool,
+    sender: str,
+    sent_at: Any,
+    message_id: str,
+    from_name: str | None,
+    increment_unread: bool = True,
+) -> None:
+    if is_skippable_whatsapp_chat(external_chat_id) or not message_id:
+        return
+
+    from allchats_sdk.events import MessageReactionDeltaEvent
+    from allchats_sdk.reactions import parse_whatsapp_reaction_message
+
+    reaction_parsed = parse_whatsapp_reaction_message(message_proto)
+    if reaction_parsed is not None:
+        target_id, emoji, is_remove = reaction_parsed
+        actor_id = sender if not is_from_me else str(client_state.user_id or account_id)
+        await event_sink.on_message_reaction_delta(
+            MessageReactionDeltaEvent(
+                connection_id=account_id,
+                provider="whatsapp",
+                external_chat_id=external_chat_id,
+                external_message_id=target_id,
+                emoji=emoji,
+                actor_id=actor_id,
+                added=not is_remove,
+            )
+        )
+        return
+
+    from_id = str(client_state.user_id or account_id)
+    if incoming_handler is not None:
+        if is_from_me:
+            await incoming_handler.process_whatsapp_outgoing(
+                account_id=account_id,
+                neonize_client=neonize_client,
+                message_proto=message_proto,
+                external_chat_id=external_chat_id,
+                title=title,
+                is_group=is_group,
+                from_=from_id,
+                sent_at=sent_at,
+                external_message_id=message_id,
+            )
+            return
+        await incoming_handler.process_whatsapp_incoming(
+            account_id=account_id,
+            neonize_client=neonize_client,
+            message_proto=message_proto,
+            external_chat_id=external_chat_id,
+            title=title,
+            is_group=is_group,
+            from_=sender,
+            sent_at=sent_at,
+            external_message_id=message_id,
+            from_name=from_name,
+            increment_unread=increment_unread,
+        )
+        return
+
+    text = extract_message_text(message_proto)
+    if not text:
+        return
+
+    if is_from_me:
+        await event_sink.on_outgoing(
+            OutgoingMessageEvent(
+                connection_id=account_id,
+                provider="whatsapp",
+                external_chat_id=external_chat_id,
+                external_message_id=message_id,
+                text=text,
+                from_id=from_id,
+                sent_at=sent_at,
+                title=title,
+                is_group=is_group,
+            )
+        )
+        return
+
+    metadata: dict[str, Any] = {}
+    if from_name:
+        metadata["from_name"] = from_name
+
+    await event_sink.on_incoming(
+        IncomingMessageEvent(
+            connection_id=account_id,
+            provider="whatsapp",
+            external_chat_id=external_chat_id,
+            external_message_id=message_id,
+            from_id=sender,
+            text=text,
+            sent_at=sent_at,
+            title=title,
+            is_group=is_group,
+            metadata=metadata,
+        )
+    )
+
+
+async def _ingest_history_sync(
+    *,
+    account_id: str,
+    client_state: WhatsAppAccountClient,
+    event_sink: EventSink,
+    incoming_handler: IncomingMessageHandler | None,
+    neonize_client: NewAClient,
+    event: Any,
+) -> None:
+    data = getattr(event, "Data", None) or getattr(event, "data", None)
+    if data is None:
+        return
+    sync_type = getattr(data, "syncType", None)
+    if sync_type is None:
+        sync_type = getattr(data, "sync_type", None)
+    if not history_sync_contains_messages(sync_type):
+        return
+
+    conversations = getattr(data, "conversations", None) or []
+    ingested = 0
+    for conversation in conversations:
+        chat_id = str(getattr(conversation, "ID", "") or getattr(conversation, "id", "") or "").strip()
+        if not chat_id or is_skippable_whatsapp_chat(chat_id):
+            continue
+        is_group = chat_id.endswith("@g.us")
+        title = str(
+            getattr(conversation, "name", "")
+            or getattr(conversation, "displayName", "")
+            or chat_id.split("@", 1)[0]
+            or chat_id
+        ).strip() or chat_id
+        for item in getattr(conversation, "messages", None) or []:
+            web_info = getattr(item, "message", None)
+            if web_info is None or not proto_field_present(web_info, "message"):
+                continue
+            message_proto = getattr(web_info, "message", None)
+            key = getattr(web_info, "key", None)
+            message_id = str(getattr(key, "ID", "") or getattr(key, "id", "") or "").strip() if key else ""
+            if not message_id or message_proto is None:
+                continue
+            is_from_me = bool(getattr(key, "fromMe", False) or getattr(key, "from_me", False))
+            participant = str(getattr(key, "participant", "") or getattr(web_info, "participant", "") or "").strip()
+            sender = participant or chat_id
+            from_name = str(getattr(web_info, "pushName", "") or "").strip() or None
+            sent_at = parse_message_timestamp(getattr(web_info, "messageTimestamp", None))
+            try:
+                await _ingest_whatsapp_message(
+                    account_id=account_id,
+                    client_state=client_state,
+                    event_sink=event_sink,
+                    incoming_handler=incoming_handler,
+                    neonize_client=neonize_client,
+                    message_proto=message_proto,
+                    external_chat_id=chat_id,
+                    title=title,
+                    is_group=is_group,
+                    is_from_me=is_from_me,
+                    sender=sender,
+                    sent_at=sent_at,
+                    message_id=message_id,
+                    from_name=from_name if is_group and not is_from_me else None,
+                    increment_unread=False,
+                )
+                ingested += 1
+            except Exception:
+                logger.exception(
+                    "whatsapp history message ingest failed account=%s chat=%s msg=%s",
+                    account_id[:8],
+                    chat_id,
+                    message_id,
+                )
+    if ingested:
+        logger.info(
+            "whatsapp history sync ingested account=%s type=%s messages=%s",
+            account_id[:8],
+            sync_type,
+            ingested,
+        )
+
+
 def release_whatsapp_session_lock(handle: IO[str] | None) -> None:
     if handle is None:
         return
@@ -176,128 +370,72 @@ async def run_whatsapp_neonize_runtime(
     async def on_message(neonize_client: NewAClient, event: MessageEv) -> None:
         if not client_state.running:
             return
+        try:
+            source = event.Info.MessageSource
+            message_proto = event.Message
+            persist_lid_mapping_from_source(session_db, source)
+            is_from_me = is_whatsapp_outgoing_message(source, message_proto)
+            chat_jid = resolve_message_chat_jid(source, info=event.Info, message=message_proto)
+            sender_jid = getattr(source, "Sender", None) or chat_jid
+            if chat_jid is None:
+                return
 
-        source = event.Info.MessageSource
-        message_proto = event.Message
-        persist_lid_mapping_from_source(session_db, source)
-        is_from_me = is_whatsapp_outgoing_message(source, message_proto)
-        chat_jid = resolve_message_chat_jid(source, info=event.Info, message=message_proto)
-        sender_jid = getattr(source, "Sender", None) or chat_jid
-        if chat_jid is None:
-            return
+            external_chat_id = jid_to_external_chat_id(chat_jid)
+            if not external_chat_id:
+                return
 
-        external_chat_id = jid_to_external_chat_id(chat_jid)
-        if not external_chat_id:
-            return
-
-        sender = jid_to_external_chat_id(sender_jid) if sender_jid is not None else external_chat_id
-        title = str(getattr(chat_jid, "User", "") or external_chat_id).strip() or external_chat_id
-        message_id = str(getattr(event.Info, "ID", "") or "").strip()
-        if not message_id:
-            return
-
-        from allchats_sdk.events import MessageReactionDeltaEvent
-        from allchats_sdk.reactions import parse_whatsapp_reaction_message
-
-        reaction_parsed = parse_whatsapp_reaction_message(message_proto)
-        if reaction_parsed is not None:
-            target_id, emoji, is_remove = reaction_parsed
-            actor_id = sender if not is_from_me else str(client_state.user_id or account_id)
-            await event_sink.on_message_reaction_delta(
-                MessageReactionDeltaEvent(
-                    connection_id=account_id,
-                    provider="whatsapp",
-                    external_chat_id=external_chat_id,
-                    external_message_id=target_id,
-                    emoji=emoji,
-                    actor_id=actor_id,
-                    added=not is_remove,
+            sender = jid_to_external_chat_id(sender_jid) if sender_jid is not None else external_chat_id
+            title = str(getattr(chat_jid, "User", "") or external_chat_id).strip() or external_chat_id
+            message_id = str(getattr(event.Info, "ID", "") or "").strip()
+            is_group = external_chat_id.endswith("@g.us")
+            timestamp = getattr(event.Info, "Timestamp", None) or getattr(event.Info, "timestamp", None)
+            from_name = None
+            if is_group and not is_from_me:
+                push_name = (
+                    getattr(event.Info, "PushName", None)
+                    or getattr(event.Info, "Pushname", None)
+                    or getattr(event.Info, "push_name", None)
+                    or getattr(source, "PushName", None)
                 )
-            )
-            return
-
-        is_group = external_chat_id.endswith("@g.us")
-        timestamp = getattr(event.Info, "Timestamp", None) or getattr(event.Info, "timestamp", None)
-        sent_at = parse_message_timestamp(timestamp)
-        from_id = str(client_state.user_id or account_id)
-        from_name = None
-        if is_group and not is_from_me:
-            push_name = (
-                getattr(event.Info, "PushName", None)
-                or getattr(event.Info, "push_name", None)
-                or getattr(source, "PushName", None)
-            )
-            from_name = str(push_name or "").strip() or None
-
-        if is_from_me:
-            pass
-
-        if incoming_handler is not None:
-            if is_from_me:
-                await incoming_handler.process_whatsapp_outgoing(
-                    account_id=account_id,
-                    neonize_client=neonize_client,
-                    message_proto=message_proto,
-                    external_chat_id=external_chat_id,
-                    title=title,
-                    is_group=is_group,
-                    from_=from_id,
-                    sent_at=sent_at,
-                    external_message_id=message_id,
-                )
-            else:
-                await incoming_handler.process_whatsapp_incoming(
-                    account_id=account_id,
-                    neonize_client=neonize_client,
-                    message_proto=message_proto,
-                    external_chat_id=external_chat_id,
-                    title=title,
-                    is_group=is_group,
-                    from_=sender,
-                    sent_at=sent_at,
-                    external_message_id=message_id,
-                    from_name=from_name,
-                )
-            return
-
-        text = extract_message_text(message_proto)
-        if not text:
-            return
-
-        if is_from_me:
-            await event_sink.on_outgoing(
-                OutgoingMessageEvent(
-                    connection_id=account_id,
-                    provider="whatsapp",
-                    external_chat_id=external_chat_id,
-                    external_message_id=message_id,
-                    text=text,
-                    from_id=from_id,
-                    sent_at=sent_at,
-                    title=title,
-                    is_group=is_group,
-                )
-            )
-            return
-
-        metadata: dict[str, Any] = {}
-        if from_name:
-            metadata["from_name"] = from_name
-
-        await event_sink.on_incoming(
-            IncomingMessageEvent(
-                connection_id=account_id,
-                provider="whatsapp",
+                from_name = str(push_name or "").strip() or None
+            await _ingest_whatsapp_message(
+                account_id=account_id,
+                client_state=client_state,
+                event_sink=event_sink,
+                incoming_handler=incoming_handler,
+                neonize_client=neonize_client,
+                message_proto=message_proto,
                 external_chat_id=external_chat_id,
-                external_message_id=message_id,
-                from_id=sender,
-                text=text,
-                sent_at=sent_at,
                 title=title,
                 is_group=is_group,
-                metadata=metadata,
+                is_from_me=is_from_me,
+                sender=sender,
+                sent_at=parse_message_timestamp(timestamp),
+                message_id=message_id,
+                from_name=from_name,
             )
-        )
+        except Exception:
+            logger.exception("whatsapp incoming handler failed account=%s", account_id[:8])
+
+    @client.event(HistorySyncEv)
+    async def on_history(neonize_client: NewAClient, event: HistorySyncEv) -> None:
+        if not client_state.running:
+            return
+        try:
+            await _ingest_history_sync(
+                account_id=account_id,
+                client_state=client_state,
+                event_sink=event_sink,
+                incoming_handler=incoming_handler,
+                neonize_client=neonize_client,
+                event=event,
+            )
+        except Exception:
+            logger.exception("whatsapp history sync failed account=%s", account_id[:8])
+
+    @client.event(StreamReplacedEv)
+    async def on_stream_replaced(_: NewAClient, __: StreamReplacedEv) -> None:
+        logger.warning("whatsapp stream replaced account=%s", account_id[:8])
 
     @client.event(ReceiptEv)
     async def on_receipt(_: NewAClient, event: ReceiptEv) -> None:

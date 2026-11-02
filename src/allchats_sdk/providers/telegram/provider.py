@@ -9,7 +9,7 @@ import asyncio
 import logging
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from allchats_sdk.providers.telegram.entities import (
@@ -651,6 +651,45 @@ class TelegramProvider:
             )
         )
         return message_id, external_chat_id
+
+    async def wait_incoming_from_peer(
+        self,
+        account_id: str,
+        *,
+        from_user_id: str,
+        after: datetime,
+        timeout_sec: float = 20.0,
+    ) -> tuple[str, str]:
+        telethon = await self._require_telethon_client(account_id)
+        await self._ensure_entity_cache(account_id, telethon)
+        peer, resolved = await self._resolve_send_target(
+            telethon,
+            account_id=account_id,
+            chat_id=str(from_user_id).strip(),
+            phone_number=None,
+        )
+        after_utc = after.astimezone(UTC) if after.tzinfo else after.replace(tzinfo=UTC)
+        after_utc = after_utc - timedelta(seconds=2)
+        deadline = asyncio.get_running_loop().time() + max(1.0, timeout_sec)
+        while asyncio.get_running_loop().time() < deadline:
+            messages = await telethon.get_messages(peer, limit=10)
+            for item in messages or []:
+                if getattr(item, "out", False):
+                    continue
+                sent = getattr(item, "date", None)
+                if sent is None:
+                    continue
+                if sent.tzinfo is None:
+                    sent = sent.replace(tzinfo=UTC)
+                if sent < after_utc:
+                    continue
+                msg_id = str(getattr(item, "id", "") or "").strip()
+                if not msg_id:
+                    continue
+                _title, _is_group, external_chat_id = await describe_peer(telethon, peer)
+                return msg_id, str(external_chat_id or resolved)
+            await asyncio.sleep(0.4)
+        raise ValidationError("intermediary account did not receive the forwarded message")
 
     async def delete_message(
         self,

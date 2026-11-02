@@ -11,7 +11,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from allchats_sdk.events import (
     IncomingMessageEvent,
@@ -25,20 +25,50 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _proxy_label(proxy_url: str | None) -> str:
+    if not proxy_url:
+        return "direct"
+    parsed = urlparse(proxy_url)
+    host = parsed.hostname or "proxy"
+    port = f":{parsed.port}" if parsed.port else ""
+    scheme = (parsed.scheme or "http").lower() or "http"
+    return f"{scheme}://{host}{port}"
+
+
 def _proxy_kwargs(proxy_url: str | None) -> dict[str, Any]:
+    """Build discord.py-self Client proxy options for curl_cffi + aiohttp.
+
+    curl_cffi must not get credentials both in the URL and via proxy_auth —
+    SOCKS5/HTTP then flap IDENTIFY / drop the gateway WebSocket.
+    Use socks5h so Discord hostnames resolve on the proxy, not the app host.
+    HTTPS-scheme proxy URLs are coerced to HTTP CONNECT (curl warning otherwise).
+    """
     if not proxy_url:
         return {}
     parsed = urlparse(proxy_url)
-    kwargs: dict[str, Any] = {"proxy": proxy_url, "proxy_gateway": True}
-    if parsed.username or parsed.password:
+    scheme = (parsed.scheme or "http").lower()
+    if scheme in {"socks5", "socks5h"}:
+        scheme = "socks5h"
+    elif scheme in {"socks4", "socks4a"}:
+        scheme = "socks4a"
+    elif scheme in {"https", "http"}:
+        scheme = "http"
+    host = parsed.hostname or ""
+    port = parsed.port
+    if not host or not port:
+        return {"proxy": proxy_url, "proxy_gateway": True}
+    kwargs: dict[str, Any] = {
+        "proxy": f"{scheme}://{host}:{port}",
+        "proxy_gateway": True,
+    }
+    username = unquote(parsed.username) if parsed.username else ""
+    password = unquote(parsed.password) if parsed.password else ""
+    if username or password:
         try:
             from aiohttp import BasicAuth
         except ImportError:
             return kwargs
-        kwargs["proxy_auth"] = BasicAuth(
-            parsed.username or "",
-            parsed.password or "",
-        )
+        kwargs["proxy_auth"] = BasicAuth(username, password)
     return kwargs
 
 
@@ -72,7 +102,6 @@ async def run_discord_selfcord_runtime(
 
     backoff_sec = 1.0
     while not stop_event.is_set():
-        manager.set_gateway_ready(account_id, False)
         proxy_url: str | None = None
         try:
             credentials = await manager.account_credentials(account_id)
@@ -90,10 +119,12 @@ async def run_discord_selfcord_runtime(
             **_proxy_kwargs(proxy_url),
         )
         manager.register_discord_library_client(account_id, client)
+        disconnect_generation = 0
 
         @client.event
         async def on_ready() -> None:  # noqa: WPS430 — nested event handler
-            nonlocal backoff_sec
+            nonlocal backoff_sec, disconnect_generation
+            disconnect_generation += 1
             user = client.user
             user_id = str(getattr(user, "id", "") or "").strip()
             if user_id:
@@ -109,7 +140,7 @@ async def run_discord_selfcord_runtime(
                 "discord selfcord ready account=%s user=%s proxy=%s",
                 account_id[:8],
                 user_id[:8] if user_id else "-",
-                "yes" if proxy_url else "direct",
+                _proxy_label(proxy_url),
             )
             for guild in list(client.guilds):
                 try:
@@ -191,8 +222,32 @@ async def run_discord_selfcord_runtime(
             await _handle_raw_gateway_event(account_id, manager, payload)
 
         @client.event
+        async def on_resumed() -> None:  # noqa: WPS430
+            nonlocal disconnect_generation
+            disconnect_generation += 1
+            manager.set_gateway_ready(account_id, True)
+
+        @client.event
         async def on_disconnect() -> None:  # noqa: WPS430
-            manager.set_gateway_ready(account_id, False)
+            # discord.py-self reconnects internally through proxies; flipping
+            # ready=False here makes the account look like it is bouncing.
+            nonlocal disconnect_generation
+            disconnect_generation += 1
+            token = disconnect_generation
+
+            async def _mark_offline_if_still_down() -> None:
+                await asyncio.sleep(8.0)
+                if token != disconnect_generation or stop_event.is_set():
+                    return
+                if manager.discord_library_client(account_id) is not client:
+                    return
+                if client.is_closed() or not client.is_ready():
+                    manager.set_gateway_ready(account_id, False)
+
+            asyncio.create_task(
+                _mark_offline_if_still_down(),
+                name=f"discord-selfcord-offline-{account_id[:8]}",
+            )
 
         start_task = asyncio.create_task(
             client.start(token),
@@ -225,7 +280,7 @@ async def run_discord_selfcord_runtime(
                 "discord selfcord reconnect account=%s err=%s proxy=%s backoff=%.1fs",
                 account_id[:8],
                 exc or "closed",
-                "yes" if proxy_url else "direct",
+                _proxy_label(proxy_url),
                 backoff_sec,
             )
             try:

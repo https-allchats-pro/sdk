@@ -6,7 +6,7 @@ from typing import Any
 from neonize.aioze.client import NewAClient
 from neonize.exc import SendMessageError
 
-from allchats_sdk.providers.whatsapp.client import unwrap_whatsapp_message
+from allchats_sdk.providers.whatsapp.client import proto_field_present, unwrap_whatsapp_message
 from allchats_sdk.types.media import (
     MESSAGE_TYPE_DOCUMENT,
     MESSAGE_TYPE_GIF,
@@ -46,20 +46,17 @@ def detect_whatsapp_media_type(message: Any) -> str | None:
 
     message = unwrap_whatsapp_message(message)
 
-    audio = getattr(message, "audioMessage", None)
-    if audio is not None:
+    if proto_field_present(message, "audioMessage"):
         return MESSAGE_TYPE_VOICE
 
-    sticker = getattr(message, "stickerMessage", None)
-    if sticker is not None:
+    if proto_field_present(message, "stickerMessage"):
         return MESSAGE_TYPE_STICKER
 
-    image = getattr(message, "imageMessage", None)
-    if image is not None:
+    if proto_field_present(message, "imageMessage"):
         return MESSAGE_TYPE_PHOTO
 
-    video = getattr(message, "videoMessage", None)
-    if video is not None:
+    if proto_field_present(message, "videoMessage"):
+        video = getattr(message, "videoMessage", None)
         if bool(getattr(video, "gifPlayback", False)):
             return MESSAGE_TYPE_GIF
         mime = _part_mime(video)
@@ -67,8 +64,8 @@ def detect_whatsapp_media_type(message: Any) -> str | None:
             return MESSAGE_TYPE_GIF
         return MESSAGE_TYPE_VIDEO
 
-    document = getattr(message, "documentMessage", None)
-    if document is not None:
+    if proto_field_present(message, "documentMessage"):
+        document = getattr(message, "documentMessage", None)
         mime = _part_mime(document)
         if mime == "image/gif":
             return MESSAGE_TYPE_GIF
@@ -80,9 +77,8 @@ def detect_whatsapp_media_type(message: Any) -> str | None:
             return MESSAGE_TYPE_VOICE
         return MESSAGE_TYPE_DOCUMENT
 
-    doc_with_caption = getattr(message, "documentWithCaptionMessage", None)
-    if doc_with_caption is not None:
-        inner = getattr(doc_with_caption, "message", None)
+    if proto_field_present(message, "documentWithCaptionMessage"):
+        inner = getattr(getattr(message, "documentWithCaptionMessage", None), "message", None)
         if inner is not None:
             return detect_whatsapp_media_type(inner)
 
@@ -94,23 +90,20 @@ def whatsapp_media_info(message: Any) -> WhatsAppMediaInfo | None:
     if message_type is None:
         return None
 
+    message = unwrap_whatsapp_message(message)
     part = None
     for field in ("audioMessage", "stickerMessage", "imageMessage", "videoMessage", "documentMessage"):
-        candidate = getattr(message, field, None)
-        if candidate is not None:
-            part = candidate
+        if proto_field_present(message, field):
+            part = getattr(message, field, None)
             break
 
-    if part is None:
-        doc_with_caption = getattr(message, "documentWithCaptionMessage", None)
-        if doc_with_caption is not None:
-            inner = getattr(doc_with_caption, "message", None)
-            if inner is not None:
-                for field in ("documentMessage", "imageMessage", "videoMessage", "audioMessage"):
-                    candidate = getattr(inner, field, None)
-                    if candidate is not None:
-                        part = candidate
-                        break
+    if part is None and proto_field_present(message, "documentWithCaptionMessage"):
+        inner = getattr(getattr(message, "documentWithCaptionMessage", None), "message", None)
+        if inner is not None:
+            for field in ("documentMessage", "imageMessage", "videoMessage", "audioMessage"):
+                if proto_field_present(inner, field):
+                    part = getattr(inner, field, None)
+                    break
 
     caption = _part_caption(part) if part is not None else ""
     filename = _part_filename(part) if part is not None else None
@@ -125,6 +118,8 @@ def whatsapp_media_info(message: Any) -> WhatsAppMediaInfo | None:
 
 def whatsapp_voice_duration_ms(message: Any) -> int | None:
     message = unwrap_whatsapp_message(message)
+    if not proto_field_present(message, "audioMessage"):
+        return None
     audio = getattr(message, "audioMessage", None)
     if audio is None:
         return None

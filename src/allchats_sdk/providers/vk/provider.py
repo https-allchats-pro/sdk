@@ -10,7 +10,7 @@ import logging
 import secrets
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from allchats_sdk.providers.vk.client import (
@@ -33,6 +33,7 @@ from allchats_sdk.providers.vk.native_api import (
     delete_reaction_async,
     extract_user_avatar_url,
     get_conversation_message_id_async,
+    get_history_async,
     send_reaction_async,
 )
 from allchats_sdk.providers.common.proxy import requests_proxies_from_credentials
@@ -978,6 +979,39 @@ class VKProvider:
             )
         )
         return message_id, target_external
+
+    async def wait_incoming_from_peer(
+        self,
+        account_id: str,
+        *,
+        from_user_id: str,
+        after: datetime,
+        timeout_sec: float = 20.0,
+    ) -> tuple[str, str]:
+        credentials = await self.ensure_valid_token(account_id, self._creds.get(account_id))
+        access_token = str(credentials.get("access_token") or "").strip()
+        peer_id = peer_id_from_external_chat_id(str(from_user_id).strip())
+        after_ts = (after.astimezone(UTC) if after.tzinfo else after.replace(tzinfo=UTC)) - timedelta(seconds=2)
+        min_ts = int(after_ts.timestamp())
+        deadline = asyncio.get_running_loop().time() + max(1.0, timeout_sec)
+        proxies = self.requests_proxies(credentials)
+        while asyncio.get_running_loop().time() < deadline:
+            items = await get_history_async(
+                access_token=access_token,
+                peer_id=peer_id,
+                count=15,
+                proxies=proxies,
+            )
+            for item in items:
+                if int(item.get("out") or 0) != 0:
+                    continue
+                if int(item.get("date") or 0) < min_ts:
+                    continue
+                msg_id = str(item.get("id") or "").strip()
+                if msg_id:
+                    return msg_id, str(peer_id)
+            await asyncio.sleep(0.4)
+        raise ValidationError("intermediary account did not receive the forwarded message")
 
     async def delete_message(
         self,

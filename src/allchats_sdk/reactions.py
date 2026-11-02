@@ -23,6 +23,10 @@ def reactions_from_max_counters(counters: list[Any]) -> dict[str, list[str]]:
 
 def parse_whatsapp_reaction_message(message_proto: Any) -> tuple[str, str, bool] | None:
     """Return (target_message_id, emoji, is_remove) for a WA reaction message."""
+    from allchats_sdk.providers.whatsapp.client import proto_field_present
+
+    if not proto_field_present(message_proto, "reactionMessage"):
+        return None
     reaction = getattr(message_proto, "reactionMessage", None)
     if reaction is None or not getattr(reaction, "key", None):
         return None

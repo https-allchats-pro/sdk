@@ -514,6 +514,42 @@ def delete_messages(
     )
 
 
+def get_history(
+    *,
+    access_token: str,
+    peer_id: int,
+    count: int = 20,
+    proxies: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    response = vk_method(
+        "messages.getHistory",
+        access_token=access_token,
+        proxies=proxies,
+        peer_id=peer_id,
+        count=count,
+    )
+    items = response.get("items") if isinstance(response, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+async def get_history_async(
+    *,
+    access_token: str,
+    peer_id: int,
+    count: int = 20,
+    proxies: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(
+        get_history,
+        access_token=access_token,
+        peer_id=peer_id,
+        count=count,
+        proxies=proxies,
+    )
+
+
 async def delete_messages_async(
     *,
     access_token: str,
