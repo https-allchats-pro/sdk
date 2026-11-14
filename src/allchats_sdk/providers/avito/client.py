@@ -418,6 +418,34 @@ async def get_subscriptions(
     )
 
 
+def system_message_text(content: dict[str, Any]) -> str:
+    direct = str(content.get("text") or "").strip()
+    if direct:
+        return direct
+
+    system = content.get("system")
+    if isinstance(system, str):
+        return system.strip()
+    if isinstance(system, dict):
+        nested = str(system.get("text") or system.get("message") or "").strip()
+        if nested:
+            return nested
+
+    chunks = content.get("chunks") or content.get("flow")
+    if isinstance(chunks, list):
+        parts: list[str] = []
+        for chunk in chunks:
+            if isinstance(chunk, str) and chunk.strip():
+                parts.append(chunk.strip())
+            elif isinstance(chunk, dict):
+                part = str(chunk.get("text") or chunk.get("value") or "").strip()
+                if part:
+                    parts.append(part)
+        if parts:
+            return " ".join(parts)
+    return ""
+
+
 def extract_message_text(message: dict[str, Any]) -> str:
     msg_type = str(message.get("type") or "text").strip().lower()
     content = message.get("content") or {}
@@ -455,7 +483,10 @@ def extract_message_text(message: dict[str, Any]) -> str:
     if msg_type == "call":
         return "[call]"
 
-    if msg_type in {"deleted", "system"}:
+    if msg_type == "system":
+        return system_message_text(content)
+
+    if msg_type == "deleted":
         return ""
 
     return f"[{msg_type}]" if msg_type else ""

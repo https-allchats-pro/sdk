@@ -3,14 +3,27 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from allchats_sdk.providers.avito.client import extract_message_text
 from allchats_sdk.providers.avito.sync_worker import (
     _chat_has_user_dialogue,
+    _handle_message,
+    _is_system_notice,
     _is_user_dialogue_message,
     _sync_chat,
 )
 
 
 class UserDialogueTests(unittest.IsolatedAsyncioTestCase):
+    def test_system_notice_text_is_extracted(self) -> None:
+        message = {
+            "id": "s",
+            "type": "system",
+            "content": {"system": {"text": "Покупатель посмотрел номер"}},
+        }
+        self.assertEqual(extract_message_text(message), "Покупатель посмотрел номер")
+        self.assertTrue(_is_system_notice(message))
+        self.assertFalse(_is_user_dialogue_message(message, owner_user_id="1"))
+
     def test_system_message_is_not_a_dialogue(self) -> None:
         self.assertFalse(
             _is_user_dialogue_message(
@@ -195,3 +208,30 @@ class UserDialogueTests(unittest.IsolatedAsyncioTestCase):
 
         sink.on_chats_discovered.assert_not_called()
         sink.on_chat_without_dialogue.assert_awaited_once_with("account-1", "chat-2")
+
+    async def test_system_notice_is_stored(self) -> None:
+        sink = AsyncMock()
+        await _handle_message(
+            "account-1",
+            chat_id="chat-1",
+            title="Анна",
+            owner_user_id="1",
+            message={
+                "id": "sys-1",
+                "type": "system",
+                "direction": "in",
+                "author_id": 2,
+                "created": 1_700_000_000,
+                "content": {"text": "Покупатель посмотрел номер"},
+            },
+            event_sink=sink,
+            seen_message_ids=set(),
+            sync_started_at_ms=None,
+            manager=AsyncMock(),
+            access_token="token",
+            proxies=None,
+        )
+        sink.on_incoming.assert_awaited_once()
+        event = sink.on_incoming.await_args.args[0]
+        self.assertEqual(event.text, "Покупатель посмотрел номер")
+        self.assertEqual(event.metadata["message_type"], "system")

@@ -217,11 +217,29 @@ async def _sync_chat(
     last_message = chat.get("last_message")
     if not isinstance(last_message, dict):
         return
-    if not _is_user_dialogue_message(last_message, owner_user_id=user_id):
+    if not _is_user_dialogue_message(last_message, owner_user_id=user_id) and not _is_system_notice(last_message):
         return
 
     message_id = str(last_message.get("id") or "").strip()
     if not message_id or message_id in seen_message_ids:
+        return
+
+    if _is_system_notice(last_message):
+        await _handle_message(
+            account_id,
+            chat_id=chat_id,
+            title=title,
+            owner_user_id=user_id,
+            message=last_message,
+            event_sink=event_sink,
+            seen_message_ids=seen_message_ids,
+            sync_started_at_ms=sync_started_at_ms,
+            manager=manager,
+            access_token=access_token,
+            proxies=proxies,
+            avatar_url=avatar_url,
+            listing=listing,
+        )
         return
 
     direction = _message_direction(last_message, owner_user_id=user_id)
@@ -269,6 +287,23 @@ async def _sync_chat(
     for message in messages:
         msg_id = str(message.get("id") or "").strip()
         if not msg_id or msg_id in seen_message_ids:
+            continue
+        if _is_system_notice(message):
+            await _handle_message(
+                account_id,
+                chat_id=chat_id,
+                title=title,
+                owner_user_id=user_id,
+                message=message,
+                event_sink=event_sink,
+                seen_message_ids=seen_message_ids,
+                sync_started_at_ms=sync_started_at_ms,
+                manager=manager,
+                access_token=access_token,
+                proxies=proxies,
+                avatar_url=avatar_url,
+                listing=listing,
+            )
             continue
         if not _is_user_dialogue_message(message, owner_user_id=user_id):
             seen_message_ids.add(msg_id)
@@ -349,6 +384,23 @@ async def _import_chat_message_history(
         message_id = str(message.get("id") or "").strip()
         if message_id:
             seen_message_ids.add(message_id)
+        if _is_system_notice(message):
+            await _handle_message(
+                account_id,
+                chat_id=chat_id,
+                title=title,
+                owner_user_id=user_id,
+                message=message,
+                event_sink=event_sink,
+                seen_message_ids=seen_message_ids,
+                sync_started_at_ms=sync_started_at_ms,
+                manager=manager,
+                access_token=access_token,
+                proxies=proxies,
+                avatar_url=avatar_url,
+                listing=listing,
+            )
+            continue
         if not _is_user_dialogue_message(message, owner_user_id=user_id):
             continue
         direction = _message_direction(message, owner_user_id=user_id)
@@ -462,6 +514,8 @@ async def _persist_incoming_message(
                     chat_id,
                     message_id,
                 )
+    if str(message.get("type") or "").strip().lower() == "system":
+        message_type = "system"
 
     if not text:
         return
@@ -609,6 +663,8 @@ async def _persist_outgoing_message(
                     chat_id,
                     message_id,
                 )
+    if str(message.get("type") or "").strip().lower() == "system":
+        message_type = "system"
 
     if not text:
         return
@@ -660,6 +716,25 @@ async def _handle_message(
 
     seen_message_ids.add(message_id)
 
+    if _message_sent_before_sync(message, sync_started_at_ms):
+        return
+
+    if _is_system_notice(message):
+        await _persist_incoming_message(
+            account_id,
+            chat_id=chat_id,
+            title=title,
+            owner_user_id=owner_user_id,
+            message=message,
+            event_sink=event_sink,
+            manager=manager,
+            access_token=access_token,
+            proxies=proxies,
+            avatar_url=avatar_url,
+            listing=listing,
+        )
+        return
+
     direction = str(message.get("direction") or "").strip().lower()
     if direction != "in":
         return
@@ -699,7 +774,7 @@ async def handle_avito_webhook_payload(
     chat_id = str(message.get("chat_id") or "").strip()
     if not chat_id:
         return
-    if not _is_user_dialogue_message(message, owner_user_id=user_id):
+    if not _is_user_dialogue_message(message, owner_user_id=user_id) and not _is_system_notice(message):
         return
 
     title = chat_id
@@ -738,6 +813,24 @@ async def handle_avito_webhook_payload(
             )
     except Exception:
         logger.debug("avito webhook chat title lookup failed", exc_info=True)
+
+    if _is_system_notice(message):
+        if _message_sent_before_sync(message, sync_started_at_ms):
+            return
+        await _persist_incoming_message(
+            account_id,
+            chat_id=chat_id,
+            title=title,
+            owner_user_id=user_id,
+            message=message,
+            event_sink=event_sink,
+            manager=manager,
+            access_token=access_token,
+            proxies=proxies,
+            avatar_url=avatar_url,
+            listing=listing,
+        )
+        return
 
     direction = str(message.get("direction") or "").strip().lower()
     author_id = str(message.get("author_id") or "").strip()
@@ -803,6 +896,15 @@ def _extract_webhook_message(payload: dict[str, Any]) -> dict[str, Any] | None:
         return payload
 
     return None
+
+
+def _is_system_notice(message: dict[str, Any] | None) -> bool:
+    """Avito platform line inside a chat (phone viewed, listing updated, …)."""
+    if not isinstance(message, dict):
+        return False
+    if str(message.get("type") or "").strip().lower() != "system":
+        return False
+    return bool(extract_message_text(message))
 
 
 def _is_user_dialogue_message(message: dict[str, Any] | None, *, owner_user_id: str) -> bool:
