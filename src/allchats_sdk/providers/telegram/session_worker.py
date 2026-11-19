@@ -17,6 +17,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def _telegram_typing_user_name(client: Any, user_id: str) -> str:
+    try:
+        entity = await asyncio.wait_for(client.get_entity(int(user_id)), timeout=1.0)
+    except Exception:
+        return ""
+    first = str(getattr(entity, "first_name", "") or "").strip()
+    last = str(getattr(entity, "last_name", "") or "").strip()
+    return " ".join(part for part in (first, last) if part).strip()
+
+
 def _resolve_sender_id(client_state: TelegramAccountClient, event: Any) -> str:
     sender_id = str(getattr(event, "sender_id", "") or "").strip()
     if sender_id:
@@ -77,7 +87,12 @@ def _register_message_handlers(
 
     from allchats_sdk.events import IncomingMessageEvent, MessageReactionsUpdatedEvent, OutgoingMessageEvent
     from allchats_sdk.providers.telegram.reactions import build_reactions_map
-    from telethon.tl.types import UpdateMessageReactions
+    from telethon.tl.types import (
+        UpdateChannelUserTyping,
+        UpdateChatUserTyping,
+        UpdateMessageReactions,
+        UpdateUserTyping,
+    )
     from allchats_sdk.providers.telegram.media import detect_telegram_media_type
 
     async def _handle_incoming_message(event: Any) -> None:
@@ -327,6 +342,45 @@ def _register_message_handlers(
                 reactions=reactions_map,
             )
         )
+
+    @client.on(events.Raw(types=[
+        UpdateUserTyping,
+        UpdateChatUserTyping,
+        UpdateChannelUserTyping,
+    ]))
+    async def on_user_typing(event: Any) -> None:
+        if not client_state.running:
+            return
+        from allchats_sdk.events import TypingEvent, publish_typing
+        from allchats_sdk.providers.telegram.typing import describe_telegram_typing
+
+        described = describe_telegram_typing(event)
+        if described is None:
+            return
+        user_id = str(described["user_id"])
+        self_id = str(getattr(client_state, "user_id", "") or "").strip()
+        if not user_id or (self_id and user_id == self_id):
+            return
+        user_name = ""
+        if described.get("is_group"):
+            user_name = await _telegram_typing_user_name(client, user_id)
+        try:
+            await publish_typing(
+                event_sink,
+                TypingEvent(
+                    connection_id=account_id,
+                    provider="telegram",
+                    external_chat_id=str(described["external_chat_id"]),
+                    user_id=user_id,
+                    user_name=user_name,
+                ),
+            )
+        except Exception:
+            logger.debug(
+                "telegram typing notify failed account=%s",
+                account_id[:8],
+                exc_info=True,
+            )
 
     @client.on(events.Raw(types=UpdateMessageReactions))
     async def on_message_reactions_raw(event: Any) -> None:

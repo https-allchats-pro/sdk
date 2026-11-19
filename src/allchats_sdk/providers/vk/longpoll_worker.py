@@ -5,7 +5,13 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from allchats_sdk.events import IncomingMessageEvent, MessageReactionsUpdatedEvent, OutgoingMessageEvent
+from allchats_sdk.events import (
+    IncomingMessageEvent,
+    MessageReactionsUpdatedEvent,
+    OutgoingMessageEvent,
+    TypingEvent,
+    publish_typing,
+)
 from allchats_sdk.providers.vk.native_api import (
     LONGPOLL_WAIT_SEC,
     NativeLongPoll,
@@ -17,6 +23,7 @@ from allchats_sdk.providers.vk.native_api import (
     parse_message_edit_reference,
     parse_message_update,
     parse_read_outbox_update,
+    parse_typing_update,
 )
 
 if TYPE_CHECKING:
@@ -116,6 +123,39 @@ async def run_vk_longpoll_worker(
                     reactions=reactions_map,
                 )
             )
+
+        for update in incoming:
+            if stop_event.is_set():
+                break
+            for typing in parse_typing_update(update):
+                user_id = str(typing["user_id"])
+                if owner_user_id and user_id == str(owner_user_id):
+                    continue
+                try:
+                    user_name = ""
+                    if typing.get("is_group"):
+                        user_name = await _vk_typing_user_name(
+                            int(user_id),
+                            access_token=access_token,
+                            profile_cache=profile_cache,
+                            proxies=proxies,
+                        )
+                    await publish_typing(
+                        event_sink,
+                        TypingEvent(
+                            connection_id=account_id,
+                            provider="vk",
+                            external_chat_id=str(typing["external_chat_id"]),
+                            user_id=user_id,
+                            user_name=user_name,
+                        ),
+                    )
+                except Exception:
+                    logger.debug(
+                        "vk typing notify failed account=%s",
+                        account_id[:8],
+                        exc_info=True,
+                    )
 
         parsed_messages = []
         for update in incoming:
@@ -245,6 +285,33 @@ async def _handle_incoming_message(
             metadata=metadata,
         )
     )
+
+
+async def _vk_typing_user_name(
+    user_id: int,
+    *,
+    access_token: str,
+    profile_cache: dict[int, dict[str, str | None]],
+    proxies: dict[str, str] | None,
+) -> str:
+    cached = profile_cache.get(user_id) or {}
+    cached_name = str(cached.get("name") or "").strip()
+    if cached_name:
+        return cached_name
+    if not access_token:
+        return ""
+    try:
+        fetched = await asyncio.to_thread(
+            get_user_profiles,
+            access_token=access_token,
+            user_ids=[user_id],
+            proxies=proxies,
+        )
+    except Exception:
+        logger.debug("vk typing profile lookup failed user=%s", user_id, exc_info=True)
+        return ""
+    profile_cache.update(fetched)
+    return str((fetched.get(user_id) or {}).get("name") or "").strip()
 
 
 def _message_sent_at(message: dict[str, Any]) -> datetime:

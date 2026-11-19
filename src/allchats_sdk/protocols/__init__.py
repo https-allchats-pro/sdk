@@ -22,6 +22,7 @@ from allchats_sdk.events import (
     MessageReactionDeltaEvent,
     MessageReactionsUpdatedEvent,
     OutgoingMessageEvent,
+    TypingEvent,
 )
 
 __all__ = [
@@ -157,6 +158,8 @@ class EventSink(Protocol):
 
     async def on_message_reaction_delta(self, event: MessageReactionDeltaEvent) -> None: ...
 
+    async def on_typing(self, event: TypingEvent) -> None: ...
+
 
 class NullEventSink:
     """No-op sink for tests / standalone use."""
@@ -183,6 +186,9 @@ class NullEventSink:
         return None
 
     async def on_message_reaction_delta(self, event: MessageReactionDeltaEvent) -> None:
+        return None
+
+    async def on_typing(self, event: TypingEvent) -> None:
         return None
 
 

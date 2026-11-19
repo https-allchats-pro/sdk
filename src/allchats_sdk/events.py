@@ -92,3 +92,22 @@ class MessageReactionDeltaEvent:
     emoji: str
     actor_id: str
     added: bool
+
+
+@dataclass
+class TypingEvent:
+    """Someone started typing in a chat. Ephemeral — hosts should not persist it."""
+
+    connection_id: str
+    provider: str
+    external_chat_id: str
+    user_id: str
+    user_name: str = ""
+
+
+async def publish_typing(event_sink: Any, event: TypingEvent) -> None:
+    """Notify the host when it implements typing. Older sinks stay untouched."""
+    handler = getattr(event_sink, "on_typing", None)
+    if handler is None:
+        return
+    await handler(event)

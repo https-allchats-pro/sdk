@@ -40,6 +40,15 @@ class _RecordingEventSink:
     async def on_chat_id_remap(self, event: Any) -> None:
         return None
 
+    async def on_message_reactions_updated(self, event: Any) -> None:
+        return None
+
+    async def on_message_reaction_delta(self, event: Any) -> None:
+        return None
+
+    async def on_typing(self, event: Any) -> None:
+        return None
+
 
 class _MediaStorageImpl:
     def save_voice(self, *, account_id: str, data: bytes, extension: str) -> str:

@@ -143,6 +143,9 @@ class VkEventType(IntEnum):
     MESSAGE_NEW = 4
     MESSAGE_EDIT = 5
     MESSAGE_READ_OUTBOX = 7
+    USER_TYPING = 61
+    CHAT_TYPING = 62
+    CHAT_TYPING_MANY = 63
 
 
 def parse_read_outbox_update(update: list[Any]) -> dict[str, Any] | None:
@@ -879,6 +882,66 @@ def parse_message_edit_reference(update: list[Any]) -> dict[str, Any] | None:
         "peer_id": peer_id,
         "external_chat_id": external_chat_id_from_peer(peer_id),
     }
+
+
+def _vk_typing_user_ids(raw_users: Any) -> list[int]:
+    if isinstance(raw_users, str):
+        parts = [part.strip() for part in raw_users.split(",")]
+    elif isinstance(raw_users, list):
+        parts = raw_users
+    else:
+        parts = [raw_users]
+    user_ids: list[int] = []
+    for part in parts:
+        if part is None or part == "":
+            continue
+        user_id = int(part)
+        if user_id > 0:
+            user_ids.append(user_id)
+    return user_ids
+
+
+def parse_typing_update(update: list[Any]) -> list[dict[str, Any]]:
+    """VK longpoll typing events (61 dialog, 62 chat, 63 several users in a chat)."""
+    if len(update) < 2:
+        return []
+    code = update[0]
+    try:
+        if code == VkEventType.USER_TYPING:
+            user_id = int(update[1])
+            if user_id <= 0:
+                return []
+            return [{
+                "external_chat_id": str(user_id),
+                "user_id": str(user_id),
+                "is_group": False,
+            }]
+        if code == VkEventType.CHAT_TYPING and len(update) >= 3:
+            user_id = int(update[1])
+            raw_chat = int(update[2])
+            if user_id <= 0 or raw_chat <= 0:
+                return []
+            peer_id = raw_chat if raw_chat > CHAT_START_ID else CHAT_START_ID + raw_chat
+            return [{
+                "external_chat_id": str(peer_id),
+                "user_id": str(user_id),
+                "is_group": True,
+            }]
+        if code == VkEventType.CHAT_TYPING_MANY and len(update) >= 3:
+            peer_id = int(update[2])
+            if peer_id == 0:
+                return []
+            return [
+                {
+                    "external_chat_id": str(peer_id),
+                    "user_id": str(user_id),
+                    "is_group": is_vk_group_peer(peer_id),
+                }
+                for user_id in _vk_typing_user_ids(update[1])
+            ]
+    except (TypeError, ValueError):
+        return []
+    return []
 
 
 def parse_message_update(update: list[Any]) -> dict[str, Any] | None:

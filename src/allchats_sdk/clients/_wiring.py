@@ -43,6 +43,11 @@ class PersistingEventSink:
     async def on_chat_id_remap(self, event: Any) -> None:
         await self._inner.on_chat_id_remap(event)
 
+    async def on_typing(self, event: Any) -> None:
+        handler = getattr(self._inner, "on_typing", None)
+        if handler is not None:
+            await handler(event)
+
 
 def resolve_event_sink(
     *,

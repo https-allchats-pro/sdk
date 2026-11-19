@@ -35,6 +35,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def max_chat_is_group(client: Any, chat_id: int | str) -> bool:
+    """True for MAX group chats and channels already present on the client."""
+    try:
+        target = int(chat_id)
+    except (TypeError, ValueError):
+        return False
+    for chat in getattr(client, "chats", None) or []:
+        try:
+            if int(getattr(chat, "id", 0)) != target:
+                continue
+        except (TypeError, ValueError):
+            continue
+        label = str(getattr(chat, "type", "") or "").upper()
+        if "." in label:
+            label = label.rsplit(".", 1)[-1]
+        return label != "DIALOG"
+    return False
+
+
 def _log_background_task_error(task: asyncio.Task[Any]) -> None:
     try:
         task.result()
@@ -542,6 +561,52 @@ class MaxRuntimeFactory:
             )
             log_max_message_attachments(message)
             await _dispatch_max_message(message, _client, from_raw=False)
+
+        typing_names: dict[int, str] = {}
+
+        @client.on_typing()
+        async def on_typing(event: Any, _client: Client | WebClient) -> None:
+            notify = getattr(self._manager, "notify_typing", None)
+            if notify is None:
+                return
+            chat_id = getattr(event, "chat_id", None)
+            user_id = getattr(event, "user_id", None)
+            if chat_id is None or user_id is None:
+                return
+            me = getattr(_client, "me", None)
+            contact = getattr(me, "contact", None) if me is not None else None
+            me_id = getattr(contact, "id", None) if contact is not None else None
+            try:
+                if me_id is not None and int(user_id) == int(me_id):
+                    return
+            except (TypeError, ValueError):
+                return
+            user_name = ""
+            if max_chat_is_group(_client, chat_id):
+                try:
+                    uid = int(user_id)
+                except (TypeError, ValueError):
+                    uid = 0
+                user_name = typing_names.get(uid, "")
+                if not user_name and uid:
+                    from allchats_sdk.providers.max.users import resolve_max_user_display_name
+
+                    user_name = str(await resolve_max_user_display_name(_client, uid) or "")
+                    if user_name:
+                        typing_names[uid] = user_name
+            try:
+                await notify(
+                    session_id,
+                    chat_id=int(chat_id),
+                    user_id=int(user_id),
+                    user_name=user_name,
+                )
+            except Exception:
+                logger.debug(
+                    "max typing notify failed session=%s",
+                    session_id[:8],
+                    exc_info=True,
+                )
 
         @client.on_message_read()
         async def on_message_read(event: Any, _client: Client | WebClient) -> None:
