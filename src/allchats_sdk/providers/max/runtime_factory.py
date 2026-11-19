@@ -581,6 +581,12 @@ class MaxRuntimeFactory:
                     return
             except (TypeError, ValueError):
                 return
+            logger.info(
+                "max typing session=%s chat=%s user=%s",
+                session_id[:8],
+                chat_id,
+                user_id,
+            )
             user_name = ""
             if max_chat_is_group(_client, chat_id):
                 try:

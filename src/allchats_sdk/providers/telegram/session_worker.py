@@ -356,7 +356,20 @@ def _register_message_handlers(
 
         described = describe_telegram_typing(event)
         if described is None:
+            action = getattr(event, "action", None)
+            logger.info(
+                "telegram typing ignored account=%s update=%s action=%s",
+                account_id[:8],
+                type(event).__name__,
+                type(action).__name__ if action is not None else None,
+            )
             return
+        logger.info(
+            "telegram typing account=%s chat=%s user=%s",
+            account_id[:8],
+            described["external_chat_id"],
+            described["user_id"],
+        )
         user_id = str(described["user_id"])
         self_id = str(getattr(client_state, "user_id", "") or "").strip()
         if not user_id or (self_id and user_id == self_id):

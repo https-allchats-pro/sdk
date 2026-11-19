@@ -13,13 +13,19 @@ def describe_telegram_typing(update: Any) -> dict[str, Any] | None:
     from telethon import utils
     from telethon.tl import types
     from telethon.tl.types import (
+        SendMessageTextDraftAction,
         SendMessageTypingAction,
         UpdateChannelUserTyping,
         UpdateChatUserTyping,
         UpdateUserTyping,
     )
 
-    if not isinstance(getattr(update, "action", None), SendMessageTypingAction):
+    # Current Telegram clients report composing as a text draft, not only
+    # as SendMessageTypingAction. Voice, upload and cancel stay hidden.
+    if not isinstance(
+        getattr(update, "action", None),
+        (SendMessageTypingAction, SendMessageTextDraftAction),
+    ):
         return None
 
     if isinstance(update, UpdateUserTyping):

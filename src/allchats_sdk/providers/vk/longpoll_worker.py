@@ -131,6 +131,12 @@ async def run_vk_longpoll_worker(
                 user_id = str(typing["user_id"])
                 if owner_user_id and user_id == str(owner_user_id):
                     continue
+                logger.info(
+                    "vk typing account=%s chat=%s user=%s",
+                    account_id[:8],
+                    typing["external_chat_id"],
+                    user_id,
+                )
                 try:
                     user_name = ""
                     if typing.get("is_group"):

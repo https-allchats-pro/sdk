@@ -1,7 +1,9 @@
 from telethon.tl import types
 from telethon.tl.types import (
     SendMessageCancelAction,
+    SendMessageTextDraftAction,
     SendMessageTypingAction,
+    TextWithEntities,
     UpdateChannelUserTyping,
     UpdateChatUserTyping,
     UpdateUserTyping,
@@ -79,6 +81,23 @@ def test_telegram_channel_typing_peer_id() -> None:
     assert described["user_id"] == "4"
     assert described["is_group"] is True
     assert described["external_chat_id"].startswith("-100")
+
+
+def test_telegram_text_draft_is_typing() -> None:
+    described = describe_telegram_typing(
+        UpdateUserTyping(
+            user_id=55,
+            action=SendMessageTextDraftAction(
+                text=TextWithEntities(text="привет", entities=[]),
+                random_id=1,
+            ),
+        ),
+    )
+    assert described == {
+        "external_chat_id": "55",
+        "user_id": "55",
+        "is_group": False,
+    }
 
 
 def test_telegram_cancel_is_not_typing() -> None:
