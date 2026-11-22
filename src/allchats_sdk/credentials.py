@@ -240,7 +240,7 @@ def account_avatar_url(credentials: dict[str, Any] | None) -> str | None:
     if not credentials:
         return None
     url = str(credentials.get("avatar_url") or "").strip()
-    if url.startswith("http://") or url.startswith("https://"):
+    if url.startswith(("http://", "https://", "/api/")):
         return url
     return None
 

@@ -228,6 +228,18 @@ async def _persist_authorized(
         "user_id": str(me.id),
         "session_data": session_data,
     }
+    from allchats_sdk.providers.telegram.entities import entity_avatar_url
+
+    avatar_url = await entity_avatar_url(
+        client,
+        me,
+        account_id=account_id,
+        external_chat_id=f"me-{me.id}",
+        media_storage=getattr(manager, "_media_storage", None),
+        download_big=False,
+    )
+    if avatar_url:
+        incoming["avatar_url"] = avatar_url
     if isinstance(credentials.get("proxy"), dict):
         incoming["proxy"] = credentials["proxy"]
     merged = merge_credentials(credentials, incoming)

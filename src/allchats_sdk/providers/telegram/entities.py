@@ -68,6 +68,46 @@ async def resolve_send_entity(
     return await client.get_entity(raw)
 
 
+def entity_can_send_messages(entity: Any) -> bool | None:
+    """Whether the logged-in user can post in this Telegram peer.
+
+    Broadcast channels and groups that ban send_messages return False.
+    Unknown entity types return None so callers keep the previous value.
+    """
+    from telethon.tl.types import Channel, Chat, User
+
+    if isinstance(entity, User):
+        return True
+
+    if isinstance(entity, Chat):
+        if getattr(entity, "left", False) or getattr(entity, "kicked", False) or getattr(entity, "deactivated", False):
+            return False
+        return True
+
+    if not isinstance(entity, Channel):
+        return None
+
+    if getattr(entity, "left", False) or getattr(entity, "kicked", False):
+        return False
+
+    creator = bool(getattr(entity, "creator", False))
+    admin = getattr(entity, "admin_rights", None)
+    is_broadcast = bool(getattr(entity, "broadcast", False)) and not bool(getattr(entity, "megagroup", False))
+    if is_broadcast:
+        return creator or bool(admin is not None and getattr(admin, "post_messages", False))
+
+    if creator or admin is not None:
+        return True
+
+    banned = getattr(entity, "banned_rights", None)
+    if banned is not None and getattr(banned, "send_messages", False):
+        return False
+    default_banned = getattr(entity, "default_banned_rights", None)
+    if default_banned is not None and getattr(default_banned, "send_messages", False):
+        return False
+    return True
+
+
 def describe_entity(entity: Any, *, external_id: str) -> tuple[str, bool]:
     from telethon.tl.types import Channel, Chat, User
 
@@ -107,29 +147,49 @@ async def entity_avatar_url(
     account_id: str | None = None,
     external_chat_id: str | None = None,
     media_storage: Any | None = None,
+    download_big: bool = False,
 ) -> str | None:
-    username = str(getattr(entity, "username", "") or "").strip()
-    if username:
-        return f"https://t.me/i/userpic/320/{username}.jpg"
+    """Save a Telegram profile photo locally.
 
-    if media_storage is None or not account_id or not external_chat_id:
-        return None
+    Lists use the small photo (``download_big=False``). The large one is
+    requested only after a chat is opened.
+    """
+    if (
+        not download_big
+        and media_storage is not None
+        and account_id
+        and external_chat_id
+    ):
+        try:
+            if media_storage.read_avatar(account_id, external_chat_id):
+                return None
+        except Exception:
+            pass
 
+    data = None
     try:
-        data = await client.download_profile_photo(entity, file=bytes)
+        data = await client.download_profile_photo(
+            entity,
+            file=bytes,
+            download_big=download_big,
+        )
     except Exception:
         logger.debug("failed to download telegram profile photo", exc_info=True)
-        return None
 
-    if not data:
-        return None
+    if data and media_storage is not None and account_id and external_chat_id:
+        media_storage.save_avatar(
+            account_id=account_id,
+            external_chat_id=external_chat_id,
+            data=data,
+        )
+        version = "b" if download_big else "s"
+        return f"{chat_avatar_api_path(account_id, external_chat_id)}?v={version}"
 
-    media_storage.save_avatar(
-        account_id=account_id,
-        external_chat_id=external_chat_id,
-        data=data,
-    )
-    return chat_avatar_api_path(account_id, external_chat_id)
+    username = str(getattr(entity, "username", "") or "").strip()
+    if username:
+        size = "320" if download_big else "160"
+        return f"https://t.me/i/userpic/{size}/{username}.jpg"
+    return None
 
 
 async def describe_peer(telethon: Any, peer: Any) -> tuple[str, bool, str]:

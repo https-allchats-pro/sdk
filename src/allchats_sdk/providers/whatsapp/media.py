@@ -199,6 +199,8 @@ async def send_whatsapp_media_message(
             response = await client.send_video(jid, data, caption=trimmed_caption)
         elif normalized_type == MESSAGE_TYPE_STICKER:
             response = await client.send_sticker(jid, data, passthrough=True)
+        elif normalized_type == MESSAGE_TYPE_VOICE:
+            response = await client.send_audio(jid, data, ptt=True)
         else:
             response = await client.send_document(
                 jid,

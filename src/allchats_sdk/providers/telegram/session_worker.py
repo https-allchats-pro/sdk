@@ -51,7 +51,11 @@ async def _resolve_incoming_context(
 ) -> dict[str, Any]:
     from telethon import utils
 
-    from allchats_sdk.providers.telegram.entities import describe_entity, entity_avatar_url
+    from allchats_sdk.providers.telegram.entities import (
+        describe_entity,
+        entity_avatar_url,
+        entity_can_send_messages,
+    )
 
     external_chat_id = str(utils.get_peer_id(event.peer_id))
     entity = await client.get_entity(event.peer_id)
@@ -70,6 +74,7 @@ async def _resolve_incoming_context(
         "is_group": is_group,
         "access_hash": access_hash,
         "avatar_url": avatar_url,
+        "can_send": entity_can_send_messages(entity),
     }
 
 
@@ -142,6 +147,7 @@ def _register_message_handlers(
                 is_group=chat_context["is_group"],
                 access_hash=chat_context["access_hash"],
                 avatar_url=chat_context["avatar_url"],
+                can_send=chat_context.get("can_send"),
                 from_name=await _resolve_group_sender_name(
                     event,
                     is_group=chat_context["is_group"],
@@ -163,6 +169,8 @@ def _register_message_handlers(
             metadata["access_hash"] = chat_context["access_hash"]
         if chat_context.get("avatar_url"):
             metadata["avatar_url"] = chat_context["avatar_url"]
+        if chat_context.get("can_send") is not None:
+            metadata["can_send"] = chat_context["can_send"]
         from_name = await _resolve_group_sender_name(
             event,
             is_group=chat_context["is_group"],
@@ -240,6 +248,7 @@ def _register_message_handlers(
                 is_group=chat_context["is_group"],
                 access_hash=chat_context["access_hash"],
                 avatar_url=chat_context["avatar_url"],
+                can_send=chat_context.get("can_send"),
             )
             return
 
@@ -256,6 +265,8 @@ def _register_message_handlers(
             metadata["access_hash"] = chat_context["access_hash"]
         if chat_context.get("avatar_url"):
             metadata["avatar_url"] = chat_context["avatar_url"]
+        if chat_context.get("can_send") is not None:
+            metadata["can_send"] = chat_context["can_send"]
         from allchats_sdk.providers.telegram.forwards import extract_telegram_forward_meta
 
         forward_meta = extract_telegram_forward_meta(event.message)
